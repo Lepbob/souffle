@@ -1,9 +1,14 @@
-Souffle : application de course (PWA), données locales uniquement.
+Souffle v1.1 : application de course (PWA), données locales.
 
-Mettre en ligne gratuitement (GitHub Pages) :
-1. Crée un compte sur github.com puis un dépôt public nommé « souffle ».
-2. Envoie tout le contenu de ce dossier (index.html, manifest.webmanifest, sw.js, dossier icons) à la racine du dépôt.
-3. Dépôt > Settings > Pages > Source : branche main, dossier /(root). L'adresse https://TON-NOM.github.io/souffle/ apparaît après 1 à 2 minutes.
-4. Sur le Samsung S23, ouvre cette adresse dans Chrome > menu ⋮ > « Installer l'application ».
+PREMIERE MISE EN LIGNE (GitHub Pages)
+1. Dépôt public « souffle » : index.html, manifest.webmanifest, sw.js et le dossier icons (au pluriel, 4 PNG) à la racine.
+2. Settings > Pages > Source : branche main, dossier /(root).
+3. Sur le S23, ouvre https://lepbob.github.io/souffle/ dans Chrome > menu ⋮ > Installer l'application.
 
-Les données sont stockées dans le téléphone (par adresse web). Fais un export JSON de temps en temps (Réglages).
+METTRE A JOUR (tes données sont conservées)
+1. Dans le dépôt « souffle », remplace index.html ET sw.js (Add file > Upload files, même nom = remplacement).
+2. Attends 1 à 2 minutes, puis ferme complètement l'appli et rouvre-la. Une fois sur deux, il faut la rouvrir une seconde fois.
+3. Ne vide jamais les données du site avant d'avoir une sauvegarde externe.
+
+SAUVEGARDE AUTOMATIQUE (dépôt PRIVE « souffle-data », jamais le dépôt public)
+Réglages > Sauvegarde automatique : le guide est dans l'appli. Le jeton reste dans le téléphone, hors des exports.
