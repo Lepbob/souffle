@@ -9,6 +9,26 @@
  "lang": "fr",
  "background_color": "#F2F4F9",
  "theme_color": "#141C2F",
+ "share_target": {
+  "action": "./share-target",
+  "method": "POST",
+  "enctype": "multipart/form-data",
+  "params": {
+   "files": [
+    {
+     "name": "gpx",
+     "accept": [
+      "application/gpx+xml",
+      ".gpx",
+      "application/octet-stream",
+      "text/xml",
+      "application/xml",
+      "text/plain"
+     ]
+    }
+   ]
+  }
+ },
  "icons": [
   {
    "src": "icons/icon-192.png",

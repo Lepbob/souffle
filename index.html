@@ -702,7 +702,7 @@ function weatherSettings(){
 }
 
 /* ================= Interface ================= */
-let view='today',draft=null,verdict=null,moving=null,painForm=null,newPlan=null,confirmReset=false,toastT=null;
+let delArm=null,view='today',draft=null,verdict=null,moving=null,painForm=null,newPlan=null,confirmReset=false,toastT=null;
 const ICON={
   today:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg>',
   plan:'<svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/></svg>',
@@ -977,7 +977,9 @@ function logRow(l){
   let h='<div class="item"><div class="row between"><div><b>'+esc(nm)+'</b> <span class="muted small">'+esc(frShort(l.date))+'</span></div><div class="row">'+(l.verdict?'<span class="pill '+vp+'">'+esc(l.verdict)+'</span>':'')+(l.rpe?'<span class="pill">'+l.rpe+'/10</span>':'')+'</div></div>';
   if(det.length)h+='<div class="small muted tnum">'+esc(det.join(' · '))+'</div>';
   if(l.note)h+='<div class="small muted">'+esc(l.note)+'</div>';
+  h+=delArm===l.id?'<div class="row small" style="margin-top:6px"><span>Supprimer cette entrée ?</span><button class="btn sm" data-act="del-log" data-id="'+l.id+'">Oui, supprimer</button><button class="btn sm" data-act="del-no">Non</button></div>':'';
   if(!l.rpe)h+='<div class="row small"><label for="rp-'+l.id+'">Ressenti ?</label><select id="rp-'+l.id+'" data-act="set-rpe" data-id="'+l.id+'" style="min-height:36px;border-radius:8px;border:1px solid var(--line);background:var(--surface);padding:4px 8px"><option value="">–</option>'+[1,2,3,4,5,6,7,8,9,10].map(n=>'<option>'+n+'</option>').join('')+'</select></div>';
+  if(delArm!==l.id)h+='<div class="row small" style="margin-top:4px"><button class="btn sm" data-act="del-ask" data-id="'+l.id+'">Supprimer</button></div>';
   return h+'</div>';
 }
 
@@ -1002,8 +1004,22 @@ function viewSettings(){
    +'<div class="hint" style="margin-top:8px">« Partager » envoie le fichier vers Drive, Gmail, Keep… depuis le menu Android. Ton jeton GitHub n\u2019est jamais inclus dans la sauvegarde.</div>'
    +'<div class="sep" style="margin:14px 0"></div>'
    +(confirmReset?'<div class="banner bad"><div><b>Tout effacer ?</b> Cette action est définitive.<div class="row" style="margin-top:8px"><button class="btn sm danger" data-act="reset-ok">Oui, effacer</button><button class="btn sm" data-act="reset-cancel">Annuler</button></div></div></div>':'<button class="btn sm danger" data-act="reset">Effacer toutes les données</button>')+'</div>';
-  h+='<div class="card flat small muted">Les fichiers GPX sont lus dans ton téléphone et jamais envoyés. Seuls les chiffres (durée, distance, allures) sont gardés, pas le tracé. Souffle v1.3 (plans multiples).</div>';
+  h+='<div class="card flat small muted">Les fichiers GPX sont lus dans ton téléphone et jamais envoyés. Seuls les chiffres (durée, distance, allures) sont gardés, pas le tracé. Souffle v1.4 (partage GPX).</div>';
   return h+'</div>';
+}
+
+/* ---- Réception d'un GPX partagé depuis une autre appli ---- */
+async function takeSharedFile(){
+  try{
+    if(!/[?&]share=1/.test(location.search)||!window.caches)return;
+    history.replaceState(null,'',location.pathname);
+    const c=await caches.open('souffle-share'),r=await c.match('shared-gpx');if(!r)return;
+    const txt=await r.text();await c.delete('shared-gpx');
+    const sn=nextSession();const sess=sn&&sn.s&&sn.s.date<=addDays(todayStr(),1)?sn.s:null;
+    draft=newDraft('run',sess);
+    await handleGpx({text:()=>Promise.resolve(txt)});
+    toast('GPX reçu : vérifie puis enregistre.');
+  }catch(e){toast('Fichier partagé illisible.');}
 }
 
 /* ---- Bilan ---- */
@@ -1021,7 +1037,7 @@ function viewLog(){
   h+='<div class="grid2" style="margin-top:12px"><div class="field"><label for="lg-date">Date</label><input id="lg-date" type="date" value="'+d.date+'" data-f="date"></div><div class="field"><label for="lg-dur">Durée (min)</label><input id="lg-dur" type="number" inputmode="numeric" value="'+esc(d.durMin)+'" data-f="durMin"></div></div></div>';
   if(d.kind!=='hand'){
     h+='<div class="card"><div class="label">Données de la montre</div>'
-      +'<div class="field" style="margin-top:10px"><label for="gpx">Importer le GPX de Mi Fitness (facultatif)</label><input id="gpx" type="file" accept=".gpx,application/gpx+xml,text/xml,application/xml"></div>'
+      +'<div class="field" style="margin-top:10px"><label for="gpx">Importer le GPX de Mi Fitness (facultatif)</label><input id="gpx" type="file"></div>'
       +(d.gpxMsg?'<div class="banner '+(d.gpxRes?'good':'warn')+'" style="margin-top:10px"><div>'+d.gpxMsg+'</div></div>':'');
     if(sess&&sess.kind==='intervals'){
       h+='<div class="grid2" style="margin-top:12px"><div class="field"><label for="lg-reps">Répétitions faites</label><input id="lg-reps" type="number" inputmode="numeric" value="'+esc(d.repsDone)+'" data-f="repsDone"></div>'
@@ -1078,6 +1094,9 @@ function nextAfter(s){
   for(let w=s.wk+1;w<=detailedWeeks();w++){const n=buildSession(w,s.key,{noToday:true});if(n)return {when:'Semaine '+w+' · '+frDate(n.date,{weekday:'long',day:'numeric',month:'long'}),what:sessionSummary(n)};}
   return null;
 }
+function findDup(date,dur,dist){
+  return S.logs.find(l=>l.date===date&&Math.abs((l.durMin||0)-(dur||0))<=2&&Math.abs((l.distKm||0)-(dist||0))<=0.25);
+}
 function saveLog(){
   const d=draft;const sess=d.sessionId?sessionById(d.sessionId):null;
   const num=x=>{const n=parseFloat(String(x).replace(',','.'));return isFinite(n)?n:null;};
@@ -1085,6 +1104,11 @@ function saveLog(){
     repsDone:null,repsPlanned:null,avgPace:parsePace(d.avgPace),firstPace:parsePace(d.firstPace),lastPace:parsePace(d.lastPace),
     hrAvg:num(d.hrAvg),hrMax:num(d.hrMax),rpe:d.rpe,reason:d.reason,verdict:null,delta:0,source:d.gpxRes?'gpx':'manuel',note:''};
   let notes=[];let label=null;
+  if(d.gpxRes){
+    const dup=findDup(log.date,log.durMin,log.distKm);
+    if(dup&&dup.sessionId){toast('Cette course est déjà enregistrée dans le suivi.');return;}
+    if(dup){S.logs=S.logs.filter(x=>x!==dup);if(log.rpe==null&&dup.rpe)d.rpe=log.rpe=dup.rpe;notes.push('Cette course existait déjà (séance du '+frShort(dup.date)+') : elle est remplacée, pas doublée.');}
+  }
   if(d.kind==='run'&&sess){
     log.key=sess.key;log.sessionId=sess.id;
     if(sess.kind==='intervals'){log.repsDone=num(d.repsDone);log.repsPlanned=sess.n;}
@@ -1118,7 +1142,10 @@ async function handleGpx(file){
         msg+=a.reps.length+' répétitions détectées sur '+sess.n+' prévues. Allures : '+paces.map(fmtPace).join(' · ')+'.'+(a.extra?' '+a.extra+' effort(s) en trop ignoré(s).':'')+' Vérifie les champs ci-dessous.';
       }else msg+='Aucune répétition détectée : saisis-les à la main.';
     }
-    d.gpxRes=a;d.gpxMsg=esc(msg);
+    d.gpxRes=a;
+    const dup=findDup(d.date,a.durMin,a.distKm);
+    if(dup)msg=(dup.sessionId?'Déjà enregistrée dans le suivi : l\u2019import sera refusé. ':'Cette course existe déjà dans l\u2019historique : elle sera remplacée, pas doublée. ')+msg;
+    d.gpxMsg=esc(msg);
   }catch(e){d.gpxRes=null;d.gpxMsg=esc(e.message||'Import impossible.');}
   render();
 }
@@ -1133,6 +1160,9 @@ document.addEventListener('click',async ev=>{
   const a=el.getAttribute('data-act'),v=el.getAttribute('data-v'),id=el.getAttribute('data-id');
   if(el.tagName==='SELECT')return;
   switch(a){
+    case 'del-ask':delArm=id;break;
+    case 'del-no':delArm=null;break;
+    case 'del-log':{S.logs=S.logs.filter(x=>x.id!==id);delArm=null;save();toast('Entrée supprimée. Si elle avait servi à la progression, les crans restent.');break;}
     case 'newplan':newPlan=newPlanDraft();break;
     case 'np-type':newPlan.type=v;break;
     case 'np-level':newPlan.level=v;break;
@@ -1228,6 +1258,7 @@ window.__souffle={parseGpx,analyseTrack,buildSession,judge,applyJudgement,buildI
   gh,syncPush,syncPull,applyRestore,readMeta,writeMeta,backupBanner,syncCard,richness,getConfirm:()=>confirmRestore,wxRefresh,wxAdvice,bestSlot,getWx:()=>WX,P,createPlan,previewPlan,shiftFor,validateNewPlan,parseSessId,rollPlan,planBanner,getNewPlan:()=>newPlan};
 try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();}catch(e){}
 render();
+takeSharedFile();
 wxRefresh(false);
 document.addEventListener('visibilitychange',function(){if(!document.hidden)wxRefresh(false);});
 })();
