@@ -1,0 +1,9 @@
+Souffle : application de course (PWA), données locales uniquement.
+
+Mettre en ligne gratuitement (GitHub Pages) :
+1. Crée un compte sur github.com puis un dépôt public nommé « souffle ».
+2. Envoie tout le contenu de ce dossier (index.html, manifest.webmanifest, sw.js, dossier icons) à la racine du dépôt.
+3. Dépôt > Settings > Pages > Source : branche main, dossier /(root). L'adresse https://TON-NOM.github.io/souffle/ apparaît après 1 à 2 minutes.
+4. Sur le Samsung S23, ouvre cette adresse dans Chrome > menu ⋮ > « Installer l'application ».
+
+Les données sont stockées dans le téléphone (par adresse web). Fais un export JSON de temps en temps (Réglages).
