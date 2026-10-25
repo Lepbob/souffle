@@ -208,6 +208,7 @@ function defaults(){
   return {
     v:1,
     profile:{age:22,height:178,weight:84,refPace:380,start:'2026-10-26',remindTime:'18:30',alertPct:10},
+    sync:{owner:'Lepbob',repo:'souffle-data',path:'souffle-sauvegarde.json',auto:true},
     offsets:{sat:0,tue:0,thu:0},
     moves:{},skips:{},pre:{},boost:{},pains:[],
     logs:[{id:'seed-20261024',kind:'run',key:null,sessionId:null,date:'2026-10-24',durMin:33,distKm:4.9,
@@ -218,11 +219,11 @@ function defaults(){
 }
 let S=load();
 function load(){
-  try{const r=localStorage.getItem(KEY);if(r){const o=JSON.parse(r);if(o&&o.v===1){const d=defaults();return Object.assign(d,o,{profile:Object.assign(d.profile,o.profile||{}),offsets:Object.assign(d.offsets,o.offsets||{})});}}}
+  try{const r=localStorage.getItem(KEY);if(r){const o=JSON.parse(r);if(o&&o.v===1){const d=defaults();return Object.assign(d,o,{profile:Object.assign(d.profile,o.profile||{}),offsets:Object.assign(d.offsets,o.offsets||{}),sync:Object.assign(d.sync,o.sync||{})});}}}
   catch(e){memOnly=true;}
   return defaults();
 }
-function save(){try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){memOnly=true;}}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){memOnly=true;}scheduleSync();}
 
 /* ================= Moteur : douleurs, séances, niveaux ================= */
 const ZONES=['Genou','Mollet','Tendon d\u2019Achille','Tibia','Cuisse','Hanche','Dos','Pied','Cheville'];
@@ -450,6 +451,119 @@ function buildIcs(){
   L.push('END:VCALENDAR');return L.join('\r\n');
 }
 
+
+/* ================= Sauvegarde externe (dépôt GitHub privé) ================= */
+const META='souffle.sync';          // jeton et état : stockés à part, jamais dans l'export
+function readMeta(){try{return JSON.parse(localStorage.getItem(META)||'{}')||{};}catch(e){return {};}}
+function writeMeta(p){try{localStorage.setItem(META,JSON.stringify(Object.assign(readMeta(),p)));}catch(e){}}
+let syncBusy=false,syncTimer=null,lastPushed='',confirmRestore=null;
+const b64e=t=>btoa(unescape(encodeURIComponent(t)));
+const b64d=t=>decodeURIComponent(escape(atob(t.replace(/\s/g,''))));
+const richness=o=>((o&&o.logs?o.logs.length:0)+(o&&o.pains?o.pains.length:0));
+function ghUrl(path){const c=S.sync;return 'https://api.github.com/repos/'+encodeURIComponent(c.owner)+'/'+encodeURIComponent(c.repo)+(path||'');}
+const ghFile=()=>'/contents/'+encodeURIComponent(S.sync.path);
+async function gh(method,url,body){
+  const tok=readMeta().token;if(!tok)throw new Error('Aucun jeton enregistré.');
+  const headers={'Authorization':'Bearer '+tok,'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'};
+  if(body)headers['Content-Type']='application/json';
+  let r;try{r=await fetch(url,{method:method,headers:headers,body:body?JSON.stringify(body):undefined});}
+  catch(e){throw new Error('Pas de connexion à GitHub.');}
+  let j=null;try{j=await r.json();}catch(e){}
+  if(!r.ok){
+    const e=new Error(r.status===401?'Jeton refusé ou expiré.':r.status===403?'Droits insuffisants pour ce jeton (il faut « Contents : Read and write »).':r.status===404?'Dépôt ou fichier introuvable (404). Vérifie le compte, le nom du dépôt et les droits du jeton.':((j&&j.message)||('Erreur '+r.status)));
+    e.status=r.status;throw e;
+  }
+  return j;
+}
+async function syncPush(opts){
+  opts=opts||{};const c=S.sync;const meta=readMeta();
+  if(syncBusy||!meta.token||(!opts.manual&&!c.auto))return;
+  syncBusy=true;
+  try{
+    const body=JSON.stringify(S,null,1);
+    if(!opts.manual&&body===lastPushed)return;
+    const repo=await gh('GET',ghUrl());
+    if(repo.private!==true)throw new Error('Le dépôt « '+c.repo+' » est public : envoi refusé. Utilise un dépôt privé.');
+    let sha=null,remote=null;
+    try{const f=await gh('GET',ghUrl(ghFile()));sha=f.sha;try{remote=JSON.parse(b64d(f.content));}catch(e){}}
+    catch(e){if(e.status!==404)throw e;}
+    if(remote&&!opts.force&&richness(remote)>richness(S)){
+      writeMeta({blocked:true,lastErr:'La sauvegarde GitHub contient plus de données que ce téléphone : envoi bloqué pour ne rien écraser. Restaure-la, ou force l’envoi si c’est voulu.'});
+      return;
+    }
+    await gh('PUT',ghUrl(ghFile()),{message:'Sauvegarde Souffle '+new Date().toISOString(),content:b64e(body),sha:sha||undefined});
+    lastPushed=body;const now=new Date().toISOString();
+    writeMeta({lastOk:now,lastBackup:now,lastErr:null,blocked:false});
+  }catch(e){writeMeta({lastErr:e.message||'Échec de l’envoi.'});}
+  finally{syncBusy=false;if(!draft&&!painForm&&!verdict)render();}
+}
+function scheduleSync(){const m=readMeta();if(!m.token||!S.sync||!S.sync.auto)return;clearTimeout(syncTimer);syncTimer=setTimeout(()=>syncPush({}),4000);}
+async function syncPull(){
+  if(syncBusy)return;syncBusy=true;
+  try{
+    const f=await gh('GET',ghUrl(ghFile()));const o=JSON.parse(b64d(f.content));
+    if(!o||o.v!==1||!Array.isArray(o.logs))throw new Error('Fichier de sauvegarde non reconnu.');
+    confirmRestore={o:o};writeMeta({lastErr:null});
+  }catch(e){writeMeta({lastErr:e.message||'Restauration impossible.'});}
+  finally{syncBusy=false;render();}
+}
+function applyRestore(){
+  const o=confirmRestore.o,cfg=S.sync;S=Object.assign(defaults(),o);S.sync=Object.assign({},defaults().sync,o.sync||{},cfg);
+  confirmRestore=null;lastPushed='';writeMeta({blocked:false,lastErr:null});save();
+}
+async function shareBackup(){
+  const name='souffle-sauvegarde-'+todayStr()+'.json',txt=JSON.stringify(S,null,1);
+  try{
+    const f=new File([txt],name,{type:'application/json'});
+    if(navigator.canShare&&navigator.canShare({files:[f]})){
+      await navigator.share({files:[f],title:'Sauvegarde Souffle'});
+      writeMeta({lastBackup:new Date().toISOString()});toast('Sauvegarde partagée.');render();return;
+    }
+  }catch(e){if(e&&e.name==='AbortError')return;}
+  const r=await saveFile(name,txt,'application/json');
+  if(r==='ok'||r==='renamed'){writeMeta({lastBackup:new Date().toISOString()});toast('Sauvegarde prête : envoie-la sur un espace en ligne.');}
+  else toast(r==='declined'?'Enregistrement annulé.':'Impossible de créer le fichier.');
+  render();
+}
+function ago(iso){
+  const m=Math.max(0,Math.round((Date.now()-Date.parse(iso))/60000));
+  if(m<2)return 'à l’instant';if(m<60)return 'il y a '+m+' min';
+  const h=Math.round(m/60);if(h<48)return 'il y a '+h+' h';return 'il y a '+Math.round(h/24)+' jours';
+}
+function backupBanner(){
+  const m=readMeta();let h='';
+  if(m.token&&m.lastErr)h+='<div class="banner bad"><div><b>Sauvegarde GitHub en échec.</b> '+esc(m.lastErr)+'<div class="row" style="margin-top:8px"><button class="btn sm" data-act="tab" data-v="settings">Ouvrir les réglages</button></div></div></div>';
+  const age=m.lastBackup?Math.floor((Date.now()-Date.parse(m.lastBackup))/864e5):null;
+  if(age===null||age>7)h+='<div class="banner warn"><div><b>'+(age===null?'Aucune sauvegarde hors du téléphone.':'Dernière sauvegarde : '+ago(m.lastBackup)+'.')+'</b> Si tu vides le cache, tes séances sont perdues.<div class="row" style="margin-top:8px"><button class="btn sm" data-act="share">Partager la sauvegarde</button><button class="btn sm" data-act="tab" data-v="settings">GitHub automatique</button></div></div></div>';
+  return h;
+}
+function syncCard(){
+  const c=S.sync,m=readMeta(),has=!!m.token;
+  let st=!has?'<span class="pill">Non configurée</span>':m.lastErr?'<span class="pill bad">Échec</span>':m.lastOk?'<span class="pill good">À jour · '+esc(ago(m.lastOk))+'</span>':'<span class="pill warn">Jamais envoyée</span>';
+  let h='<div class="card"><div class="row between"><div class="label">Sauvegarde automatique (GitHub privé)</div>'+st+'</div>';
+  if(m.lastErr)h+='<div class="banner bad" style="margin-top:10px"><div>'+esc(m.lastErr)+'</div></div>';
+  if(confirmRestore){
+    const o=confirmRestore.o,last=o.logs.map(l=>l.date).sort().pop();
+    h+='<div class="banner info" style="margin-top:10px"><div><b>Restaurer cette sauvegarde ?</b> Elle contient '+o.logs.length+' séance(s)'+(last?', la dernière du '+esc(frShort(last)):'')+' et '+(o.pains||[]).length+' douleur(s). Les données actuelles de ce téléphone seront remplacées.<div class="row" style="margin-top:8px"><button class="btn sm primary" data-act="restore-ok">Oui, restaurer</button><button class="btn sm" data-act="restore-cancel">Annuler</button></div></div></div>';
+  }
+  h+='<div class="grid2" style="margin-top:12px"><div class="field"><label for="sy-owner">Compte GitHub</label><input id="sy-owner" type="text" autocapitalize="off" autocomplete="off" value="'+esc(c.owner)+'" data-sync="owner"></div>'
+    +'<div class="field"><label for="sy-repo">Dépôt privé</label><input id="sy-repo" type="text" autocapitalize="off" autocomplete="off" value="'+esc(c.repo)+'" data-sync="repo"></div></div>';
+  if(!has){
+    h+='<div class="field" style="margin-top:12px"><label for="sy-token">Jeton d’accès</label><input id="sy-token" type="password" autocapitalize="off" autocomplete="off" placeholder="github_pat_…"></div>'
+      +'<div class="row" style="margin-top:12px"><button class="btn primary" data-act="sync-save">Enregistrer et tester</button></div>'
+      +'<details style="margin-top:14px"><summary style="cursor:pointer;font-weight:600">Comment le créer (2 minutes, une seule fois)</summary><ol class="steps">'
+      +'<li>Sur github.com : <b>New repository</b>, nom « souffle-data », coche <b>Private</b> et « Add a README ».</li>'
+      +'<li><b>Settings</b> (ton profil) &gt; Developer settings &gt; Personal access tokens &gt; <b>Fine-grained tokens</b> &gt; Generate new token.</li>'
+      +'<li>Repository access : <b>Only select repositories</b> &gt; souffle-data. Permissions &gt; Repository permissions &gt; <b>Contents : Read and write</b>. Expiration : 1 an.</li>'
+      +'<li>Copie le jeton affiché (une seule fois) et colle-le ci-dessus. Ne l’envoie à personne.</li></ol></details>';
+  }else{
+    h+='<div class="seg" style="margin-top:12px"><button data-act="sync-auto" aria-pressed="'+(!!c.auto)+'">Envoi automatique : '+(c.auto?'oui':'non')+'</button></div>'
+      +'<div class="row" style="margin-top:12px"><button class="btn" data-act="sync-now">Envoyer maintenant</button><button class="btn" data-act="sync-pull">Restaurer</button>'+(m.blocked?'<button class="btn danger" data-act="sync-force">Forcer l’envoi</button>':'')+'<button class="btn ghost" data-act="sync-clear">Retirer le jeton</button></div>';
+  }
+  h+='<div class="hint" style="margin-top:10px">Chaque envoi crée une version dans GitHub : tu peux y retrouver d’anciennes sauvegardes. L’envoi est refusé si le dépôt est public ou contient plus de données que ce téléphone.</div></div>';
+  return h;
+}
+
 /* ================= Interface ================= */
 let view='today',draft=null,verdict=null,moving=null,painForm=null,confirmReset=false,toastT=null;
 const ICON={
@@ -489,6 +603,7 @@ function nextSession(){
 function viewToday(){
   const today=todayStr(),wk=currentWeek();let h=header();const {s,overdue}=nextSession();const dow=parseD(today).getDay();
   h+='<div class="stack">';
+  h+=backupBanner();
   if(wk<1){h+='<div class="banner info"><div><b>Ton plan démarre le lundi '+esc(frDate(S.profile.start,{day:'numeric',month:'long'}))+'.</b> Voici la première séance.</div></div>';}
   const p=painState(today);
   if(p&&p.level!=='legere')h+='<div class="banner '+(p.level==='douleur'?'warn':'bad')+'"><div><b>'+esc(PAIN_LV[p.level]?PAIN_LV[p.level].n:'Douleur persistante')+' ('+esc(p.zone.toLowerCase())+').</b> Les séances intenses sont retirées jusqu\u2019au '+esc(frShort(p.until))+'.'+(p.level==='forte'||p.level==='persistante'?' Un avis médical est conseillé.':'')+'</div></div>';
@@ -639,8 +754,9 @@ function viewSettings(){
    +'<div class="field"><label for="st-alert">Alerte de charge (%)</label><input id="st-alert" type="number" inputmode="numeric" value="'+p.alertPct+'" data-set="alertPct"></div></div>'
    +'<div class="row" style="margin-top:14px"><button class="btn primary" data-act="ics">Rappels pour l\u2019agenda (.ics)</button><button class="btn" data-act="shift">Décaler le plan d\u2019une semaine</button></div>'
    +'<div class="hint" style="margin-top:8px">Le fichier .ics ajoute les 48 séances (16 semaines) avec une alerte 30 min avant. Ouvre-le avec ton agenda Android. Les rappels sont gérés par l\u2019agenda, donc fiables app fermée.</div></div>';
-  h+='<div class="card"><div class="label">Sauvegarde</div><div class="row" style="margin-top:10px"><button class="btn" data-act="export">Exporter (JSON)</button><label class="btn" for="imp" style="display:inline-flex;align-items:center">Importer</label><input id="imp" type="file" accept=".json,application/json" hidden></div>'
-   +'<div class="hint" style="margin-top:8px">Tes données restent uniquement dans ce téléphone. L\u2019export est ta seule copie : fais-en un de temps en temps.</div>'
+  h+=syncCard();
+  h+='<div class="card"><div class="label">Sauvegarde manuelle</div><div class="row" style="margin-top:10px"><button class="btn primary" data-act="share">Partager la sauvegarde</button><button class="btn" data-act="export">Exporter (JSON)</button><label class="btn" for="imp" style="display:inline-flex;align-items:center">Importer</label><input id="imp" type="file" accept=".json,application/json" hidden></div>'
+   +'<div class="hint" style="margin-top:8px">« Partager » envoie le fichier vers Drive, Gmail, Keep… depuis le menu Android. Ton jeton GitHub n\u2019est jamais inclus dans la sauvegarde.</div>'
    +'<div class="sep" style="margin:14px 0"></div>'
    +(confirmReset?'<div class="banner bad"><div><b>Tout effacer ?</b> Cette action est définitive.<div class="row" style="margin-top:8px"><button class="btn sm danger" data-act="reset-ok">Oui, effacer</button><button class="btn sm" data-act="reset-cancel">Annuler</button></div></div></div>':'<button class="btn sm danger" data-act="reset">Effacer toutes les données</button>')+'</div>';
   h+='<div class="card flat small muted">Les fichiers GPX sont lus dans ton téléphone et jamais envoyés. Seuls les chiffres (durée, distance, allures) sont gardés, pas le tracé.</div>';
@@ -799,7 +915,22 @@ document.addEventListener('click',async ev=>{
     case 'save-pain':S.pains.push({date:todayStr(),zone:painForm.zone,level:painForm.level});painForm=null;save();toast('Douleur enregistrée : le plan s\u2019adapte.');break;
     case 'ics':{const r=await saveFile('souffle-rappels.ics',buildIcs(),'text/calendar');toast(r==='ok'?'Fichier prêt : ouvre-le avec ton agenda.':r==='renamed'?'Enregistré en .txt : renomme-le en .ics pour l\u2019ouvrir.':r==='declined'?'Enregistrement annulé.':'Impossible de créer le fichier.');return;}
     case 'shift':S.profile.start=addDays(S.profile.start,7);save();toast('Plan décalé d\u2019une semaine.');break;
-    case 'export':{const r=await saveFile('souffle-sauvegarde-'+todayStr()+'.json',JSON.stringify(S,null,1),'application/json');toast(r==='ok'||r==='renamed'?'Sauvegarde prête.':r==='declined'?'Enregistrement annulé.':'Impossible de créer le fichier.');return;}
+    case 'export':{const r=await saveFile('souffle-sauvegarde-'+todayStr()+'.json',JSON.stringify(S,null,1),'application/json');if(r==='ok'||r==='renamed')writeMeta({lastBackup:new Date().toISOString()});toast(r==='ok'||r==='renamed'?'Sauvegarde prête.':r==='declined'?'Enregistrement annulé.':'Impossible de créer le fichier.');render();return;}
+    case 'share':await shareBackup();return;
+    case 'sync-save':{
+      const tk=(document.getElementById('sy-token')||{}).value;if(!tk||!tk.trim()){toast('Colle d\u2019abord le jeton.');return;}
+      if(!/^[\w.-]+$/.test(S.sync.owner)||!/^[\w.-]+$/.test(S.sync.repo)){toast('Nom de compte ou de dépôt invalide.');return;}
+      writeMeta({token:tk.trim(),lastErr:null,blocked:false});toast('Test de la connexion…');
+      await syncPush({manual:true});const m=readMeta();
+      if(m.lastErr&&!m.blocked&&!m.lastOk){writeMeta({token:''});}
+      toast(m.lastErr?'Échec : '+m.lastErr:'Connecté : première sauvegarde envoyée.');render();return;}
+    case 'sync-now':{await syncPush({manual:true});const m=readMeta();toast(m.lastErr?'Échec : '+m.lastErr:'Sauvegarde envoyée.');render();return;}
+    case 'sync-force':{await syncPush({manual:true,force:true});const m=readMeta();toast(m.lastErr?'Échec : '+m.lastErr:'Sauvegarde GitHub remplacée.');render();return;}
+    case 'sync-pull':await syncPull();return;
+    case 'restore-ok':applyRestore();toast('Données restaurées.');break;
+    case 'restore-cancel':confirmRestore=null;break;
+    case 'sync-auto':S.sync.auto=!S.sync.auto;save();break;
+    case 'sync-clear':writeMeta({token:'',lastErr:null,blocked:false});toast('Jeton retiré de ce téléphone.');break;
     case 'reset':confirmReset=true;break;
     case 'reset-cancel':confirmReset=false;break;
     case 'reset-ok':S=defaults();save();confirmReset=false;toast('Données effacées.');break;
@@ -815,8 +946,9 @@ document.addEventListener('change',ev=>{
   const t=ev.target;
   if(t.id==='gpx'&&t.files&&t.files[0]){handleGpx(t.files[0]);return;}
   if(t.id==='imp'&&t.files&&t.files[0]){
-    t.files[0].text().then(tx=>{try{const o=JSON.parse(tx);if(!o||o.v!==1||!Array.isArray(o.logs))throw 0;S=Object.assign(defaults(),o);save();toast('Sauvegarde importée.');}catch(e){toast('Fichier de sauvegarde non reconnu.');}render();});return;}
+    t.files[0].text().then(tx=>{try{const o=JSON.parse(tx);if(!o||o.v!==1||!Array.isArray(o.logs))throw 0;const cfg=S.sync;S=Object.assign(defaults(),o);S.sync=Object.assign({},defaults().sync,o.sync||{},cfg);save();toast('Sauvegarde importée.');}catch(e){toast('Fichier de sauvegarde non reconnu.');}render();});return;}
   if(t.getAttribute&&t.getAttribute('data-act')==='set-rpe'){const l=S.logs.find(x=>x.id===t.getAttribute('data-id'));if(l&&t.value){l.rpe=+t.value;save();render();}return;}
+  if(t.getAttribute&&t.getAttribute('data-sync')){const kk=t.getAttribute('data-sync');S.sync[kk]=t.value.trim();try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}return;}
   const k=t.getAttribute&&t.getAttribute('data-set');
   if(k){
     const p=S.profile;
@@ -830,7 +962,8 @@ document.addEventListener('change',ev=>{
 
 /* accès pour les tests */
 window.__souffle={parseGpx,analyseTrack,buildSession,judge,applyJudgement,buildIcs,painState,weeklyLoads,getS:()=>S,setS:x=>{S=x;},parsePace,fmtPace,defaults,render,
-  setNow:null};
+  gh,syncPush,syncPull,applyRestore,readMeta,writeMeta,backupBanner,syncCard,richness,getConfirm:()=>confirmRestore};
+try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();}catch(e){}
 render();
 })();
 </script>
