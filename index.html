@@ -207,7 +207,7 @@ let memOnly=false;
 function defaults(){
   return {
     v:1,
-    profile:{age:22,height:178,weight:84,refPace:380,start:'2026-10-26',remindTime:'18:30',alertPct:10},
+    profile:{age:22,height:178,weight:84,refPace:380,start:'2026-10-26',remindTime:'18:30',alertPct:10,loc:null},
     sync:{owner:'Lepbob',repo:'souffle-data',path:'souffle-sauvegarde.json',auto:true},
     offsets:{sat:0,tue:0,thu:0},
     moves:{},skips:{},pre:{},boost:{},pains:[],
@@ -266,13 +266,22 @@ function buildSession(wk,key,opts){
     if(pain.level==='douleur'&&key!=='thu'){kind='easy';painMsg={cls:'warn',t:'Douleur ('+pain.zone.toLowerCase()+') : pas d\u2019intensité jusqu\u2019au '+frShort(pain.until)+'. Footing très facile à la place.'};}
     if((pain.level==='forte'||pain.level==='persistante')){kind='rest';painMsg={cls:'bad',t:(pain.level==='forte'?'Forte douleur':'Douleur qui revient')+' ('+pain.zone.toLowerCase()+') : pas de course. Un avis médical est conseillé avant de reprendre.'};}
   }
+  let wxSlow=1;
+  if(!opts.noToday&&locOk()&&kind!=='rest'){
+    const wa=wxAdvice(date,sessionHour());
+    if(wa){
+      if(wa.eff.level&&kind==='intervals'){lvl+=wa.eff.level;adj.push({d:wa.eff.level,t:wa.eff.heatText});}
+      if(wa.eff.slow&&kind==='intervals'){wxSlow=wa.eff.slow;adj.push({d:-1,t:wa.eff.heatText});}
+      if(wa.eff.ice&&key!=='thu'&&kind==='intervals'){kind='easy';painMsg=painMsg||{cls:'warn',t:wa.eff.iceText};}
+    }
+  }
   lvl=clamp(lvl,0,maxL);
   const s={id,wk,key,role,date,planned:plannedDate(wk,key),level:lvl,base,adj,kind,pain:painMsg,
     title:key==='sat'?'Fractionné':key==='tue'?'Fractionné doux':'Footing facile et renforcement',
     done:!!logFor(id),skipped:!!S.skips[id],phase:phaseOf(wk)};
   const ref=S.profile.refPace;
   if(kind==='intervals'){
-    const L=LADDER[key][lvl];s.n=L.n;s.eff=L.eff;s.rest=L.rest;s.pace=targetPace(ref,L.eff);
+    const L=LADDER[key][lvl];s.n=L.n;s.eff=L.eff;s.rest=L.rest;s.pace=targetPace(ref,L.eff)*wxSlow;
     s.rpeTarget=key==='sat'?'8 sur 10':'6 à 7 sur 10, jamais plus (veille de hand)';
     s.warm=10;s.cool=5;
   }else if(kind==='easy'){
@@ -564,6 +573,114 @@ function syncCard(){
   return h;
 }
 
+/* ================= Météo (Open-Meteo) ================= */
+const WX_KEY='souffle.wx',WX_TTL=2*3600e3;
+let WX=null,wxBusy=false,wxMsg='',geoRes=null,wxQ='';
+try{WX=JSON.parse(localStorage.getItem(WX_KEY)||'null');}catch(e){WX=null;}
+function saveWx(){try{localStorage.setItem(WX_KEY,JSON.stringify(WX));}catch(e){}}
+const locOk=()=>{const l=S.profile.loc;return !!(l&&isFinite(l.lat)&&isFinite(l.lon));};
+async function wxRefresh(force){
+  if(!locOk()||wxBusy)return;
+  const l=S.profile.loc;
+  if(!force&&WX&&WX.lat===l.lat&&WX.lon===l.lon&&Date.now()-WX.t<WX_TTL)return;
+  if(navigator.onLine===false){wxMsg='Hors ligne : dernière météo affichée.';return;}
+  wxBusy=true;
+  try{
+    const u='https://api.open-meteo.com/v1/forecast?latitude='+l.lat+'&longitude='+l.lon
+      +'&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,wind_speed_10m,weather_code'
+      +'&daily=sunrise,sunset&timezone=auto&forecast_days=5&wind_speed_unit=kmh';
+    const r=await fetch(u);if(!r.ok)throw new Error('http '+r.status);
+    const j=await r.json();
+    WX={t:Date.now(),lat:l.lat,lon:l.lon,time:j.hourly.time,temp:j.hourly.temperature_2m,app:j.hourly.apparent_temperature,
+      pp:j.hourly.precipitation_probability,pr:j.hourly.precipitation,wind:j.hourly.wind_speed_10m,code:j.hourly.weather_code,
+      sun:{day:j.daily.time,rise:j.daily.sunrise,set:j.daily.sunset}};
+    saveWx();wxMsg='';
+  }catch(e){wxMsg='Météo indisponible pour le moment.';}
+  finally{wxBusy=false;if(!draft&&!painForm&&!verdict)render();}
+}
+async function wxSearch(q){
+  const r=await fetch('https://geocoding-api.open-meteo.com/v1/search?name='+encodeURIComponent(q)+'&count=5&language=fr&format=json');
+  if(!r.ok)throw new Error('http');
+  const j=await r.json();
+  return (j.results||[]).map(x=>({name:x.name,area:[x.admin1,x.country].filter(Boolean).join(', '),lat:Math.round(x.latitude*100)/100,lon:Math.round(x.longitude*100)/100}));
+}
+function wxAt(date,hour){
+  if(!WX||!WX.time)return null;
+  const i=WX.time.indexOf(date+'T'+pad(hour)+':00');if(i<0)return null;
+  return {temp:WX.temp[i],app:WX.app[i],pp:WX.pp[i],pr:WX.pr[i],wind:WX.wind[i],code:WX.code[i]};
+}
+function sunOf(date){
+  const k=(WX&&WX.sun&&WX.sun.day)?WX.sun.day.indexOf(date):-1;
+  return k<0?null:{rise:WX.sun.rise[k].slice(11,16),set:WX.sun.set[k].slice(11,16)};
+}
+const hmNum=t=>{const p=t.split(':');return +p[0]+ +p[1]/60;};
+function sessionHour(){const t=(S.profile.remindTime||'18:30').split(':');return {h:+t[0]||18,m:+t[1]||0};}
+function wcode(c){
+  if(c===0)return 'ciel dégagé';if(c===1)return 'plutôt dégagé';if(c===2)return 'partiellement nuageux';if(c===3)return 'couvert';
+  if(c===45||c===48)return 'brouillard';if(c>=51&&c<=57)return 'bruine';if(c===66||c===67)return 'pluie verglaçante';
+  if(c>=61&&c<=65)return 'pluie';if(c>=71&&c<=77)return 'neige';if(c>=80&&c<=82)return 'averses';if(c===85||c===86)return 'averses de neige';
+  if(c>=95)return 'orage';return 'variable';
+}
+function wxAdvice(date,sh){
+  const f=sh.h+sh.m/60,hh=Math.min(23,Math.floor(f+.5));
+  const w=wxAt(date,hh);if(!w||w.temp==null)return null;
+  const sun=sunOf(date),tips=[],eff={},app=w.app==null?w.temp:w.app;
+  if(app>=32){eff.level=-1;eff.heatText='Forte chaleur ('+Math.round(app)+' °C ressentis) : séance allégée d’un cran. Bois avant et pendant.';tips.push(eff.heatText);}
+  else if(app>=28){eff.slow=1.04;eff.heatText='Chaleur ('+Math.round(app)+' °C ressentis) : allure visée ralentie de 4 %. Hydrate-toi.';tips.push(eff.heatText);}
+  if(w.temp<=0.5){eff.ice=true;eff.iceText='Gel possible ('+Math.round(w.temp)+' °C) : pas de fractionné sur sol glissant, footing facile à la place.';tips.push(eff.iceText);}
+  else if(app<=3)tips.push('Froid : échauffement plus long (15 min), couvre mains et oreilles.');
+  if((w.pp!=null&&w.pp>=60)||w.pr>=1)tips.push('Pluie probable ('+(w.pp==null?'':w.pp+' %')+') : tenue adaptée et prudence dans les virages.');
+  if(w.wind>=35)tips.push('Vent fort ('+Math.round(w.wind)+' km/h) : juge l’allure au ressenti plutôt qu’au chrono.');
+  if(sun&&f>=hmNum(sun.set)-.25)tips.push('Nuit à '+sun.set+' : gilet réfléchissant ou lampe frontale.');
+  return {w,tips,eff};
+}
+function slotScore(w,night){
+  const app=w.app==null?w.temp:w.app;
+  let sc=Math.abs(app-12)*.6+(w.pp||0)*.05+(w.pr||0)*3+Math.max(0,w.wind-15)*.25;
+  if(app>25)sc+=(app-25)*1.5;if(w.temp<=.5)sc+=10;if(night)sc+=25;return sc;
+}
+function bestSlot(date){
+  const sun=sunOf(date);if(!sun||!WX)return null;
+  const now=new Date(),isToday=date===todayStr(),minH=isToday?now.getHours()+1:7;
+  let best=null;
+  for(let h=Math.max(7,minH);h<=20;h++){
+    const a=wxAt(date,h),b=wxAt(date,h+1);if(!a||!b||a.temp==null||b.temp==null)continue;
+    const night=(h+2)>hmNum(sun.set)+.25||h<hmNum(sun.rise);
+    const sc=(slotScore(a,night)+slotScore(b,night))/2;
+    if(!best||sc<best.sc)best={h:h,sc:sc,a:a,b:b,night:night};
+  }
+  return best;
+}
+function weatherCard(s){
+  if(!locOk())return '<div class="banner info"><div><b>Météo :</b> choisis ta ville pour voir la météo de tes séances.<div class="row" style="margin-top:8px"><button class="btn sm" data-act="tab" data-v="settings">Choisir ma ville</button></div></div></div>';
+  const l=S.profile.loc;
+  let h='<div class="card"><div class="row between"><div class="label">Météo · '+esc(l.name)+'</div>'+(WX&&WX.t?'<span class="small muted">'+esc(ago(new Date(WX.t).toISOString()))+'</span>':'')+'</div>';
+  if(!WX||!WX.time){h+='<div class="muted" style="margin-top:8px">'+(wxMsg?esc(wxMsg):'Chargement…')+'</div>';}
+  else{
+    const wa=wxAdvice(s.date,sessionHour());
+    if(!wa)h+='<div class="muted" style="margin-top:8px">Prévision disponible dans les 5 jours qui précèdent la séance.</div>';
+    else{
+      const w=wa.w;
+      h+='<div class="row" style="margin-top:8px;align-items:baseline"><span class="disp" style="font-size:40px">'+Math.round(w.temp)+'°</span><span class="muted">ressenti '+Math.round(w.app==null?w.temp:w.app)+'° · '+esc(wcode(w.code))+'</span></div>';
+      h+='<div class="small muted tnum">À '+esc(S.profile.remindTime)+' : vent '+Math.round(w.wind)+' km/h · pluie '+(w.pp==null?'–':w.pp+' %')+(w.pr>0?' ('+w.pr+' mm)':'')+'</div>';
+      const b=bestSlot(s.date);
+      if(b)h+='<dl class="kv"><dt>Meilleur créneau</dt><dd>'+pad(b.h)+'h à '+pad(b.h+2)+'h · '+Math.round(b.a.app==null?b.a.temp:b.a.app)+'° ressenti'+(b.night?' · de nuit':'')+'</dd></dl>';
+      const sun=sunOf(s.date);if(sun)h+='<div class="small muted" style="margin-top:6px">Lever '+sun.rise+' · coucher '+sun.set+'</div>';
+      if(wa.tips.length)h+='<ul class="clean">'+wa.tips.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>';
+    }
+    if(wxMsg)h+='<div class="hint" style="margin-top:8px">'+esc(wxMsg)+'</div>';
+  }
+  return h+'<div class="row" style="margin-top:10px"><button class="btn sm" data-act="wx-refresh">Actualiser</button></div></div>';
+}
+function weatherSettings(){
+  const l=S.profile.loc;
+  let h='<div class="card"><div class="label">Météo</div><div class="muted" style="margin-top:6px">'+(l?esc(l.name)+' · '+l.lat+', '+l.lon:'Aucune ville choisie.')+'</div>'
+    +'<div class="field" style="margin-top:12px"><label for="wx-q">Ville d’entraînement</label><input id="wx-q" type="text" autocomplete="off" placeholder="Ex. Lyon" value="'+esc(wxQ)+'"></div>'
+    +'<div class="row" style="margin-top:12px"><button class="btn primary" data-act="wx-search">Chercher</button><button class="btn" data-act="wx-geo">Utiliser ma position</button>'+(l?'<button class="btn ghost" data-act="wx-clear">Retirer</button>':'')+'</div>';
+  if(geoRes&&geoRes.length)h+='<div class="stack" style="margin-top:12px">'+geoRes.map((g,i)=>'<button class="btn" style="text-align:left" data-act="wx-pick" data-i="'+i+'">'+esc(g.name)+' <span class="muted small">'+esc(g.area)+'</span></button>').join('')+'</div>';
+  return h+'<div class="hint" style="margin-top:10px">Une seule requête par rafraîchissement, au plus toutes les 2 h, quand tu ouvres l’app. Seules des coordonnées arrondies à environ 1 km sont envoyées à Open-Meteo (gratuit, sans compte). La dernière météo reste affichée hors ligne.</div></div>';
+}
+
 /* ================= Interface ================= */
 let view='today',draft=null,verdict=null,moving=null,painForm=null,confirmReset=false,toastT=null;
 const ICON={
@@ -613,6 +730,7 @@ function viewToday(){
   else{
     const isToday=s.date===today;
     h+=sessionHero(s,isToday);
+    if(s.kind!=='rest')h+=weatherCard(s);
     if(isToday&&s.kind!=='rest'){h+=feelingCard(s);}
     h+=watchCard(s);
     if(s.key==='thu'&&s.kind==='easy')h+='<div class="card"><div class="label">Renforcement (15 min)</div><ul class="clean">'+RENFO.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul></div>';
@@ -754,12 +872,13 @@ function viewSettings(){
    +'<div class="field"><label for="st-alert">Alerte de charge (%)</label><input id="st-alert" type="number" inputmode="numeric" value="'+p.alertPct+'" data-set="alertPct"></div></div>'
    +'<div class="row" style="margin-top:14px"><button class="btn primary" data-act="ics">Rappels pour l\u2019agenda (.ics)</button><button class="btn" data-act="shift">Décaler le plan d\u2019une semaine</button></div>'
    +'<div class="hint" style="margin-top:8px">Le fichier .ics ajoute les 48 séances (16 semaines) avec une alerte 30 min avant. Ouvre-le avec ton agenda Android. Les rappels sont gérés par l\u2019agenda, donc fiables app fermée.</div></div>';
+  h+=weatherSettings();
   h+=syncCard();
   h+='<div class="card"><div class="label">Sauvegarde manuelle</div><div class="row" style="margin-top:10px"><button class="btn primary" data-act="share">Partager la sauvegarde</button><button class="btn" data-act="export">Exporter (JSON)</button><label class="btn" for="imp" style="display:inline-flex;align-items:center">Importer</label><input id="imp" type="file" accept=".json,application/json" hidden></div>'
    +'<div class="hint" style="margin-top:8px">« Partager » envoie le fichier vers Drive, Gmail, Keep… depuis le menu Android. Ton jeton GitHub n\u2019est jamais inclus dans la sauvegarde.</div>'
    +'<div class="sep" style="margin:14px 0"></div>'
    +(confirmReset?'<div class="banner bad"><div><b>Tout effacer ?</b> Cette action est définitive.<div class="row" style="margin-top:8px"><button class="btn sm danger" data-act="reset-ok">Oui, effacer</button><button class="btn sm" data-act="reset-cancel">Annuler</button></div></div></div>':'<button class="btn sm danger" data-act="reset">Effacer toutes les données</button>')+'</div>';
-  h+='<div class="card flat small muted">Les fichiers GPX sont lus dans ton téléphone et jamais envoyés. Seuls les chiffres (durée, distance, allures) sont gardés, pas le tracé.</div>';
+  h+='<div class="card flat small muted">Les fichiers GPX sont lus dans ton téléphone et jamais envoyés. Seuls les chiffres (durée, distance, allures) sont gardés, pas le tracé. Souffle v1.2 (météo).</div>';
   return h+'</div>';
 }
 
@@ -930,6 +1049,15 @@ document.addEventListener('click',async ev=>{
     case 'restore-ok':applyRestore();toast('Données restaurées.');break;
     case 'restore-cancel':confirmRestore=null;break;
     case 'sync-auto':S.sync.auto=!S.sync.auto;save();break;
+    case 'wx-search':{const q=(wxQ||'').trim();if(q.length<2){toast('Tape au moins 2 lettres.');break;}
+      try{geoRes=await wxSearch(q);if(!geoRes.length)toast('Aucune ville trouvée.');}catch(e){geoRes=null;toast('Recherche impossible (hors ligne ?).');}break;}
+    case 'wx-pick':{const g=geoRes&&geoRes[+el.getAttribute('data-i')];if(!g)break;S.profile.loc={name:g.name,lat:g.lat,lon:g.lon};geoRes=null;save();wxRefresh(true);toast('Ville enregistrée : '+g.name+'.');break;}
+    case 'wx-geo':{if(!navigator.geolocation){toast('Position indisponible sur cet appareil.');break;}toast('Recherche de ta position…');
+      try{const pos=await new Promise((ok,ko)=>navigator.geolocation.getCurrentPosition(ok,ko,{timeout:15000,maximumAge:600000}));
+        S.profile.loc={name:'Ma position',lat:Math.round(pos.coords.latitude*100)/100,lon:Math.round(pos.coords.longitude*100)/100};save();wxRefresh(true);toast('Position enregistrée (arrondie à 1 km).');}
+      catch(e){toast('Position refusée ou indisponible : cherche ta ville.');}break;}
+    case 'wx-refresh':wxRefresh(true);toast('Actualisation…');break;
+    case 'wx-clear':S.profile.loc=null;WX=null;saveWx();save();break;
     case 'sync-clear':writeMeta({token:'',lastErr:null,blocked:false});toast('Jeton retiré de ce téléphone.');break;
     case 'reset':confirmReset=true;break;
     case 'reset-cancel':confirmReset=false;break;
@@ -941,6 +1069,7 @@ document.addEventListener('click',async ev=>{
 document.addEventListener('input',ev=>{
   const t=ev.target;
   if(t.hasAttribute('data-f')&&draft){draft[t.getAttribute('data-f')]=t.value;}
+  if(t.id==='wx-q')wxQ=t.value;
 });
 document.addEventListener('change',ev=>{
   const t=ev.target;
@@ -962,9 +1091,11 @@ document.addEventListener('change',ev=>{
 
 /* accès pour les tests */
 window.__souffle={parseGpx,analyseTrack,buildSession,judge,applyJudgement,buildIcs,painState,weeklyLoads,getS:()=>S,setS:x=>{S=x;},parsePace,fmtPace,defaults,render,
-  gh,syncPush,syncPull,applyRestore,readMeta,writeMeta,backupBanner,syncCard,richness,getConfirm:()=>confirmRestore};
+  gh,syncPush,syncPull,applyRestore,readMeta,writeMeta,backupBanner,syncCard,richness,getConfirm:()=>confirmRestore,wxRefresh,wxAdvice,bestSlot,getWx:()=>WX};
 try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();}catch(e){}
 render();
+wxRefresh(false);
+document.addEventListener('visibilitychange',function(){if(!document.hidden)wxRefresh(false);});
 })();
 </script>
 <script>if('serviceWorker' in navigator){window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(){});});}</script></body></html>
