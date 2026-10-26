@@ -145,6 +145,15 @@ const frShort=s=>parseD(s).toLocaleDateString('fr-FR',{weekday:'short',day:'nume
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const fmtPace=s=>{if(!s||!isFinite(s))return '–';let m=Math.floor(s/60),r=Math.round(s%60);if(r===60){m++;r=0;}return m+"'"+pad(r);};
+function parseDur(t){
+  if(t==null)return null;t=String(t).trim().replace(',','.').replace(/["”″s]$/,'');if(!t)return null;
+  if(/^\d+(\.\d+)?$/.test(t))return Math.round(parseFloat(t)*60);
+  const ps=t.split(/[:'’m]/).map(x=>x.trim());if(ps.length<2||ps.length>3||ps.some(x=>!/^\d{1,3}$/.test(x)))return null;
+  const n=ps.map(Number),sec=n[n.length-1],min=n[n.length-2],h=n.length===3?n[0]:0;
+  if(sec>59||(h&&min>59))return null;return h*3600+min*60+sec;
+}
+const fmtDur=sec=>{if(sec==null||!isFinite(sec))return '–';sec=Math.round(sec);const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),r=sec%60;return h?h+':'+pad(m)+':'+pad(r):m+':'+pad(r);};
+const fmtEffSec=sec=>sec<120?(Math.round(sec*10)/10+'').replace('.',',')+' s':fmtDur(sec);
 function parsePace(t){
   if(t==null)return null;t=String(t).trim().replace(/[”"″]/g,'');if(!t)return null;
   const m=t.match(/^(\d{1,2})\s*[:'’.,h]\s*(\d{1,2})$/);if(m){return +m[1]*60+ +m[2];}
@@ -223,6 +232,7 @@ function defaults(){
     sync:{owner:'Lepbob',repo:'souffle-data',path:'souffle-sauvegarde.json',auto:true},
     offsets:{sat:0,tue:0,thu:0},
     moves:{},skips:{},pre:{},boost:{},pains:[],
+    trash:[],
     logs:[{id:'seed-20261024',kind:'run',key:null,sessionId:null,date:'2026-10-24',durMin:33,distKm:4.9,
       repsDone:10,repsPlanned:10,avgPace:275,firstPace:null,lastPace:null,rpe:null,reason:'',
       verdict:null,delta:0,source:'gpx',
@@ -260,6 +270,13 @@ const plannedDate=(wk,key)=>addDays(weekStart(wk),DOW[key]);
 const effDate=(wk,key)=>S.moves[sessId(wk,key)]||plannedDate(wk,key);
 const logFor=id=>S.logs.find(l=>l.sessionId===id);
 
+const TEST_TYPES={'6min':{lab:'6 min',W:360,div:100},'cooper':{lab:'Cooper 12 min',W:720,div:200}};
+const TEST_WEEKS={cycle:[2,4,8,12,16],maintien:[1,6,12]};
+const isTestWeekOf=(pl,wk)=>(TEST_WEEKS[pl.type]||[]).indexOf(wk)>=0;
+const vmaOf=(type,distM)=>distM/TEST_TYPES[type].div;
+const fmtKmh=v=>(Math.round(v*10)/10+'').replace('.',',');
+function vmaTests(){return S.logs.filter(l=>l.kind==='test'&&l.test).sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);}
+function lastVma(){const t=vmaTests();return t.length?t[t.length-1].test.vma:null;}
 function buildSession(wk,key,opts){
   opts=opts||{};
   if(wk<1||wk>detailedWeeks()||P().keys.indexOf(key)<0)return null;
@@ -275,7 +292,7 @@ function buildSession(wk,key,opts){
     if(pre==='fatigue'){lvl-=1;adj.push({d:-1,t:'Tu es fatigué aujourd\u2019hui : version allégée.'});}
     if(S.boost[id]&&pre==='bien'){lvl+=1;adj.push({d:1,t:'Tu es en forme et tu as choisi la version plus dure.'});}
   }
-  let kind=key==='thu'?'easy':'intervals';
+  let kind=key==='thu'?'easy':(key==='sat'&&isTestWeekOf(P(),wk)?'test':'intervals');
   const pain=painState(date);let painMsg=null;
   if(pain){
     if(pain.level==='legere'&&key!=='thu'){lvl-=1;adj.push({d:-1,t:'Gêne légère ('+pain.zone.toLowerCase()+') : séance plus douce jusqu\u2019au '+frShort(pain.until)+'.'});}
@@ -293,13 +310,15 @@ function buildSession(wk,key,opts){
   }
   lvl=clamp(lvl,0,maxL);
   const s={id,wk,key,role,date,planned:plannedDate(wk,key),level:lvl,base,adj,kind,pain:painMsg,
-    title:key==='sat'?'Fractionné':key==='tue'?'Fractionné doux':'Footing facile et renforcement',
+    title:kind==='test'?'Test VMA':key==='sat'?'Fractionné':key==='tue'?'Fractionné doux':'Footing facile et renforcement',
     done:!!logFor(id),skipped:!!S.skips[id],phase:phaseOf(wk)};
   const ref=S.profile.refPace;
   if(kind==='intervals'){
     const L=LADDER[key][lvl];s.n=L.n;s.eff=L.eff;s.rest=L.rest;s.pace=targetPace(ref,L.eff)*wxSlow;
     s.rpeTarget=key==='sat'?'8 sur 10':'6 à 7 sur 10, jamais plus (veille de hand)';
     s.warm=10;s.cool=5;
+  }else if(kind==='test'){
+    s.test=true;s.testType='6min';s.minutes=6;s.pace=null;s.rpeTarget='10 sur 10 : effort maximal, mais régulier';s.warm=15;s.cool=10;
   }else if(kind==='easy'){
     s.minutes=key==='thu'?THU[lvl]:25;s.pace=ref*1.1;s.rpeTarget='3 sur 10 : tu peux parler sans effort';
   }
@@ -308,6 +327,12 @@ function buildSession(wk,key,opts){
 function weekSessions(wk,opts){return P().keys.map(k=>buildSession(wk,k,opts)).filter(Boolean);}
 function watchSteps(s){
   if(s.kind==='rest')return [];
+  if(s.kind==='test')return [
+    'Échauffement : chrono libre, 15 min de footing très facile, puis 3 accélérations progressives de 15 s avec 1 min de marche entre chaque.',
+    'Test : '+TEST_TYPES[s.testType].lab+' à fond, en course libre (ou un fractionné 1 × '+TEST_TYPES[s.testType].lab+' si tu préfères). Pars à une allure que tu peux tenir jusqu\u2019au bout : la dernière minute doit être la plus dure, pas la première.',
+    'À l\u2019arrivée, note la distance affichée par la montre. L\u2019import GPX la retrouvera aussi tout seul.',
+    'Retour au calme : 10 min de footing très facile ou de marche.'
+  ];
   if(s.kind==='easy')return ['Séance « course libre » (chrono libre) : '+s.minutes+' min à allure très facile.','Allure indicative '+fmtPace(s.pace)+'/km, mais le critère est de pouvoir parler.'];
   const eff=s.eff.t==='time'?fmtEff(s.eff):fmtEff(s.eff)+' (distance, en centaines de mètres)';
   return [
@@ -317,7 +342,7 @@ function watchSteps(s){
     'Retour au calme : si ta montre ne le programme pas, continue en footing libre ou en marchant pendant '+s.cool+' min.'
   ];
 }
-const sessionSummary=s=>s.kind==='intervals'?s.n+' × '+fmtEff(s.eff)+' · récup '+fmtRest(s.rest.s)+' '+s.rest.m:s.kind==='easy'?s.minutes+' min de footing facile':'Repos';
+const sessionSummary=s=>s.kind==='test'?'Test VMA · '+TEST_TYPES[s.testType].lab+' à fond, régulier':s.kind==='intervals'?s.n+' × '+fmtEff(s.eff)+' · récup '+fmtRest(s.rest.s)+' '+s.rest.m:s.kind==='easy'?s.minutes+' min de footing facile':'Repos';
 
 /* ================= Jugement d'une séance ================= */
 function judge(s,d){
@@ -353,7 +378,7 @@ function judge(s,d){
   return {label,notes,delta};
 }
 function applyJudgement(s,res,log){
-  const notes=res.notes.slice();let delta=res.delta;const k=s.key;
+  const notes=res.notes.slice();let delta=res.delta;const k=s.key;const before=Object.assign({},S.offsets);
   const lastSame=S.logs.filter(l=>l.key===k&&l.sessionId).sort((a,b)=>a.date<b.date?-1:1).pop();
   if(delta>0&&lastSame&&lastSame.delta>0){delta=0;notes.push('Plafond de progression : deux hausses d\u2019affilée sont évitées. Le niveau reste le même cette fois.');}
   if(delta>0&&(S.offsets[k]||0)>=2){delta=0;notes.push('Le niveau est déjà 2 crans au-dessus du plan de base : on stabilise.');}
@@ -366,6 +391,7 @@ function applyJudgement(s,res,log){
     ['sat','tue','thu'].forEach(x=>{S.offsets[x]=clamp((S.offsets[x]||0)-1,-2,2);});
     notes.push('Deux séances dures d\u2019affilée : allègement automatique des prochaines séances.');
   }
+  log.fx={};['sat','tue','thu'].forEach(x=>{const dd=(S.offsets[x]||0)-(before[x]||0);if(dd)log.fx[x]=dd;});
   return notes;
 }
 
@@ -393,7 +419,8 @@ function analyseTrack(pts,plan){
     const f=(t-T[lo])/((T[hi]-T[lo])||1);return Dm[lo]+f*(Dm[hi]-Dm[lo]);};
   const timeAtDist=d=>{if(d<=0)return 0;if(d>=total)return dur;let lo=0,hi=Dm.length-1;while(hi-lo>1){const m=(lo+hi)>>1;if(Dm[m]<d)lo=m;else hi=m;}
     const f=(d-Dm[lo])/((Dm[hi]-Dm[lo])||1);return T[lo]+f*(T[hi]-T[lo]);};
-  const res={durMin:Math.round(dur/60),distKm:total/1000,avgPace:total>0?dur/(total/1000):null,reps:[]};
+  const res={durSec:Math.round(dur),durMin:dur/60,distKm:total/1000,avgPace:total>0?dur/(total/1000):null,reps:[]};
+  res.win=function(W){let best=0;for(let t=0;t+W<=dur;t+=1){const dd=distAt(t+W)-distAt(t);if(dd>best)best=dd;}return best;};
   res.track=(function(){
     const lat0=pts[0].lat,lon0=pts[0].lon,kx=111320*Math.cos(lat0*Math.PI/180),ky=110540,N=Math.min(240,pts.length),out=[];
     for(let k=0;k<N;k++){
@@ -432,7 +459,7 @@ function analyseTrack(pts,plan){
 }
 
 /* ================= Charge hebdomadaire ================= */
-const loadOf=l=>(l.durMin&&l.rpe)?l.durMin*l.rpe:0;
+const loadOf=l=>(l.durMin&&l.rpe)?Math.round(l.durMin*l.rpe):0;
 function weeklyLoads(n){
   const cur=mondayOf(todayStr());const out=[];
   for(let i=n-1;i>=0;i--){
@@ -478,10 +505,11 @@ function buildIcs(){
       const pdate=addDays(pl.start,7*(wk-1)+DOW[key]);
       if(pl.closed&&pdate>pl.closed)return;
       const date=isAct&&detailed?(S.moves[sessIdOf(pl,wk,key)]||pdate):pdate;
-      const nm={tue:'Fractionné doux (veille de hand)',thu:'Footing facile et renforcement',sat:'Séance clé'}[key];
+      const isT=key==='sat'&&isTestWeekOf(pl,wk);
+      const nm=isT?'Test VMA':{tue:'Fractionné doux (veille de hand)',thu:'Footing facile et renforcement',sat:'Séance clé'}[key];
       let desc=pl.name+' · semaine '+wk+(pl.type==='maintien'?'':' · '+(PHASES.find(q=>wk>=q.w[0]&&wk<=q.w[1])||PHASES[3]).name);
-      if(detailed){desc+='\n'+(isAct?sessionSummary(buildSession(wk,key,{noToday:true})):ladderLabel(key,baseLevel(pl.type,pl.shift,key,wk)));}
-      else desc+='\nDétail à définir après la phase 1.';
+      if(detailed){desc+='\n'+(isT&&!isAct?'Test VMA : 6 min à fond.':isAct?sessionSummary(buildSession(wk,key,{noToday:true})):ladderLabel(key,baseLevel(pl.type,pl.shift,key,wk)));}
+      else desc+=isT?'\nTest VMA : 6 min à fond.':'\nDétail à définir après la phase 1.';
       const d=date.replace(/-/g,'');
       L.push('BEGIN:VEVENT','UID:'+sessIdOf(pl,wk,key)+'@souffle','DTSTAMP:'+stamp,'DTSTART:'+d+'T'+hh+mm+'00','DURATION:PT1H',
         'SUMMARY:'+icsEsc('Souffle · '+nm),'DESCRIPTION:'+icsEsc(desc),'BEGIN:VALARM','ACTION:DISPLAY','DESCRIPTION:'+icsEsc('Séance dans 30 min'),'TRIGGER:-PT30M','END:VALARM','END:VEVENT');
@@ -713,7 +741,7 @@ function weatherSettings(){
 }
 
 /* ================= Interface ================= */
-let traceOpen=null,delArm=null,view='today',draft=null,verdict=null,moving=null,painForm=null,newPlan=null,confirmReset=false,toastT=null;
+let editDraft=null,traceOpen=null,delArm=null,view='today',draft=null,verdict=null,moving=null,painForm=null,newPlan=null,confirmReset=false,toastT=null;
 const ICON={
   today:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg>',
   plan:'<svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/></svg>',
@@ -778,6 +806,9 @@ function sessionHero(s,isToday){
     h+='<div class="spec tnum">'+s.n+' × '+esc(fmtEff(s.eff)).replace(' min','<small> min</small>').replace(/(\d) m$/,'$1<small> m</small>')+'</div>';
     h+='<div class="muted">Récupération '+esc(fmtRest(s.rest.s))+' '+esc(s.rest.m)+'</div>';
     h+='<dl class="kv"><dt>Allure à l\u2019effort</dt><dd class="tnum">≈ '+esc(fmtPace(s.pace))+'/km</dd><dt>Ressenti visé</dt><dd>'+esc(s.rpeTarget)+'</dd><dt>Avant / après</dt><dd>'+s.warm+' min d\u2019échauffement · '+s.cool+' min de retour au calme</dd></dl>';
+  }else if(s.kind==='test'){
+    h+='<div class="spec tnum">6<small> min</small></div><div class="muted">Test VMA : la plus grande distance possible, à allure régulière</div>';
+    h+='<dl class="kv"><dt>Ressenti visé</dt><dd>'+esc(s.rpeTarget)+'</dd><dt>Avant / après</dt><dd>'+s.warm+' min d\u2019échauffement · '+s.cool+' min de retour au calme</dd><dt>Conseil</dt><dd>Pars régulier : trop vite au départ fausse le test.</dd></dl>';
   }else if(s.kind==='easy'){
     h+='<div class="spec tnum">'+s.minutes+'<small> min</small></div><div class="muted">Footing très facile, allure ≈ '+esc(fmtPace(s.pace))+'/km</div>';
     h+='<dl class="kv"><dt>Ressenti visé</dt><dd>'+esc(s.rpeTarget)+'</dd></dl>';
@@ -798,7 +829,8 @@ function feelingCard(s){
   [['bien','En forme'],['moyen','Normal'],['fatigue','Fatigué']].forEach(o=>{h+='<button data-act="pre" data-v="'+o[0]+'" data-date="'+s.date+'" aria-pressed="'+(pre===o[0])+'">'+o[1]+'</button>';});
   h+='</div>';
   if(pre==='bien'&&s.kind==='intervals'&&s.key!=='thu')h+='<div class="row between" style="margin-top:12px"><span class="small">Tu peux tenter la version plus dure.</span><button class="btn sm" data-act="boost" data-id="'+s.id+'" aria-pressed="'+(!!S.boost[s.id])+'">'+(S.boost[s.id]?'Version plus dure activée':'Passer au cran au-dessus')+'</button></div>';
-  if(pre==='fatigue')h+='<div class="hint" style="margin-top:10px">Séance allégée d\u2019un cran. Si tu es vraiment à plat, saute-la : aucune pénalité.</div>';
+  if(pre==='fatigue'&&s.kind==='test')h+='<div class="hint" style="margin-top:10px">Fatigué ? Décale le test : fait fatigué, il sous-estime ta VMA.</div>';
+  else if(pre==='fatigue')h+='<div class="hint" style="margin-top:10px">Séance allégée d\u2019un cran. Si tu es vraiment à plat, saute-la : aucune pénalité.</div>';
   return h+'</div>';
 }
 function watchCard(s){
@@ -887,7 +919,7 @@ function planItem(s){return '<div class="item" style="padding:8px 0"><div class=
 function planHeaderCard(){
   const pl=P(),wk=currentWeek();
   let h='<div class="card"><div class="row between"><div><div class="label">Plan en cours</div><h3 style="font-size:20px;margin-top:2px">'+esc(pl.name)+'</h3></div><span class="pill '+(pl.type==='maintien'?'mod':'key')+'">'+(pl.type==='maintien'?'Maintien':'Cycle')+'</span></div>'
-    +'<div class="muted" style="margin-top:6px">Du '+esc(frDate(pl.start,{day:'numeric',month:'long'}))+' au '+esc(frDate(planEnd(pl),{day:'numeric',month:'long'}))+' · '+pl.weeks+' semaines'+(wk>=1&&wk<=pl.weeks?' · semaine '+wk:'')+'</div>';
+    +'<div class="muted" style="margin-top:6px">Du '+esc(frDate(pl.start,{day:'numeric',month:'long'}))+' au '+esc(frDate(planEnd(pl),{day:'numeric',month:'long'}))+' · '+pl.weeks+' semaines'+(wk>=1&&wk<=pl.weeks?' · semaine '+wk:'')+'</div><div class="small muted" style="margin-top:4px">Tests VMA : semaines '+(TEST_WEEKS[pl.type]||[]).join(', ')+' (à la place du fractionné du samedi).</div>';
   S.plans.filter(q=>q.start>todayStr()).forEach(q=>{h+='<div class="banner info" style="margin-top:10px"><div><b>Prochain plan : '+esc(q.name)+'</b> ('+(q.type==='maintien'?'maintien':'cycle')+') à partir du '+esc(frDate(q.start,{day:'numeric',month:'long'}))+'.</div></div>';});
   return h+'<div class="row" style="margin-top:12px"><button class="btn primary" data-act="newplan">Reprogrammer un plan</button></div></div>';
 }
@@ -968,30 +1000,100 @@ function viewTrack(){
   else h+='<div class="hint" style="margin-top:10px">La comparaison apparaît dès que deux semaines consécutives ont un ressenti noté.</div>';
   h+='</div>';
   const pn=S.pains.slice().sort((a,b)=>a.date<b.date?1:-1).slice(0,4);
+  h+=vmaCard();
   h+='<div class="card"><div class="row between"><div class="label">Douleurs</div><button class="btn sm" data-act="pain">Signaler</button></div>';
   h+=pn.length?'<ul class="clean">'+pn.map(p=>'<li>'+esc(frShort(p.date))+' · '+esc(p.zone)+' · '+esc(PAIN_LV[p.level].n.toLowerCase())+'</li>').join('')+'</ul>':'<div class="muted small" style="margin-top:6px">Aucune douleur signalée.</div>';
   h+='</div>';
   h+='<div class="card"><div class="row between"><div class="label">Historique</div><button class="btn sm" data-act="open-log-free">Ajouter</button></div>';
   const logs=S.logs.slice().sort((a,b)=>a.date<b.date?1:-1);
   h+=logs.length?logs.map(logRow).join(''):'<div class="muted small" style="margin-top:6px">Aucune séance enregistrée.</div>';
-  return h+'</div></div>';
+  h+='</div>';
+  const tr=S.trash||[];
+  if(tr.length){
+    h+='<div class="card"><div class="label">Corbeille</div><div class="hint" style="margin:4px 0 6px">Ces séances n\u2019influencent plus le plan ni la charge. Restaurer les remet comme avant.</div>';
+    tr.slice().reverse().forEach(l=>{h+='<div class="item"><div class="row between"><div><b>'+esc(logTitle(l))+'</b> <span class="muted small">'+esc(frShort(l.date))+'</span></div></div><div class="small muted tnum">'+esc(logDetails(l).join(' · '))+'</div><div class="row small" style="margin-top:6px"><button class="btn sm primary" data-act="restore" data-id="'+l.id+'">Restaurer</button><button class="btn sm" data-act="purge" data-id="'+l.id+'">Supprimer définitivement</button></div></div>';});
+    h+='</div>';
+  }
+  return h+'</div>';
+}
+function vmaCard(){
+  const ts=vmaTests();
+  let h='<div class="card"><div class="row between"><div class="label">VMA</div><button class="btn sm" data-act="open-test">Enregistrer un test</button></div>';
+  if(!ts.length){
+    return h+'<p class="muted" style="margin:8px 0 0">Aucun test pour l\u2019instant. Le premier est prévu à la place du fractionné du samedi 7 novembre (semaine 2) : 6 minutes à fond, régulier, pour mesurer ta VMA.</p></div>';
+  }
+  const v=ts[ts.length-1].test.vma;
+  h+='<div class="spec tnum" style="font-size:44px;margin-top:6px">'+fmtKmh(v)+'<small> km/h</small></div><div class="muted">Allure à 100 % : '+fmtPace(3600/v)+'/km · test du '+esc(frShort(ts[ts.length-1].date))+'</div>';
+  if(ts.length>1){
+    h+='<div class="label" style="margin-top:14px">Évolution</div><div style="margin-top:6px">'+ts.slice().reverse().map((t,i,arr)=>{const nx=arr[i+1];const dl=nx?t.test.vma-nx.test.vma:null;return '<div class="row between small tnum" style="padding:4px 0"><span>'+esc(frShort(t.date))+' · '+esc(TEST_TYPES[t.test.type].lab)+' · '+t.test.distM+' m</span><b>'+fmtKmh(t.test.vma)+' km/h'+(dl!=null?' <span class="'+(dl>=0?'ok':'muted')+'">('+(dl>=0?'+':'')+fmtKmh(dl)+')</span>':'')+'</b></div>';}).join('')+'</div>';
+  }
+  h+='<div class="label" style="margin-top:14px">Tes allures (indicatives)</div><div class="row small muted tnum" style="justify-content:space-between;margin-top:6px"><span style="width:38%">% VMA · usage</span><span>km/h</span><span>/km</span><span>100 m en</span></div>';
+  [[.65,'Footing facile'],[.75,'Allure soutenue'],[.85,'Efforts 3 à 4 min'],[.9,'Efforts 1 à 2 min'],[.95,'Efforts courts'],[1,'VMA']].forEach(r=>{const sp=v*r[0];
+    h+='<div class="row small tnum" style="justify-content:space-between;padding:4px 0;border-top:1px solid var(--line)"><span style="width:38%">'+Math.round(r[0]*100)+' % · '+r[1]+'</span><span>'+fmtKmh(sp)+'</span><span>'+fmtPace(3600/sp)+'</span><span>'+fmtEffSec(360/sp)+'</span></div>';});
+  const sug=Math.round(3600/(v*.66));
+  if(Math.abs(sug-S.profile.refPace)>=10)h+='<div class="banner info" style="margin-top:12px"><div>Ton allure de référence est '+fmtPace(S.profile.refPace)+'/km. À 66 % de ta VMA (footing de 25 min sans effort), elle serait de '+fmtPace(sug)+'/km.<div class="row" style="margin-top:8px"><button class="btn sm" data-act="vma-ref">Utiliser '+fmtPace(sug)+'/km</button></div></div></div>';
+  return h+'<div class="hint" style="margin-top:8px">Le GPS d\u2019un téléphone a une marge d\u2019environ 2 à 3 % : compare surtout les tests entre eux, depuis le même parcours.</div></div>';
+}
+function logTitle(l){
+  if(l.name)return l.name;
+  if(l.kind==='hand')return 'Hand';
+  if(l.kind==='test'&&l.test)return 'Test VMA · '+(TEST_TYPES[l.test.type]||{lab:''}).lab;
+  if(l.kind==='other'&&!l.repsDone)return 'Autre séance';
+  const base=l.key?{sat:'Fractionné',tue:'Fractionné doux',thu:'Footing facile'}[l.key]:(l.repsDone?'Fractionné':'Course');
+  return base+(l.repsDone&&l.key!=='thu'?' · '+l.repsDone+' × '+(l.effLabel||'')+(l.effLabel?'':'rép.'):'').replace(' × rép.',' rép.');
+}
+function logDetails(l){
+  const det=[],secs=l.durSec!=null?l.durSec:(l.durMin?Math.round(l.durMin*60):null);
+  if(secs)det.push(fmtDur(secs));
+  if(l.distKm)det.push(l.distKm.toFixed(2).replace('.',',')+' km');
+  if(secs&&l.distKm)det.push('allure '+fmtPace(secs/l.distKm)+'/km');
+  if(l.test)det.push(l.test.distM+' m · VMA '+fmtKmh(l.test.vma)+' km/h');
+  if(l.repsDone!=null&&l.kind!=='hand'&&l.repsPlanned)det.push(l.repsDone+'/'+l.repsPlanned+' rép.');
+  if(l.avgPace)det.push('efforts '+fmtPace(l.avgPace)+'/km');
+  if(l.hrAvg)det.push('FC '+l.hrAvg+(l.hrMax?'/'+l.hrMax:''));
+  return det;
+}
+function keyPointsLine(l){
+  let ms=null,md=null;
+  if(l.reps&&l.reps.length){ms=l.reps.reduce((a,r)=>a+r[0],0)/l.reps.length;md=l.reps.reduce((a,r)=>a+r[1],0)/l.reps.length;}
+  else if(l.kp){ms=l.kp.sec||null;md=l.kp.dist||null;}
+  if(!ms&&!md)return '';
+  let t='Effort moyen : '+(md?Math.round(md)+' m':'')+(md&&ms?' en ':'')+(ms?fmtEffSec(ms):'');
+  if(l.reps&&l.reps.length>1)t+=' · détail : '+l.reps.map(r=>l.effT==='dist'?fmtEffSec(r[0]):Math.round(r[1])+' m').join(' · ');
+  return t;
+}
+function editForm(l){
+  const e=editDraft,f=(k,lab,type,ph)=>'<div class="field"><label for="ed-'+k+'">'+lab+'</label><input id="ed-'+k+'" type="'+(type||'text')+'" value="'+esc(e[k])+'" placeholder="'+(ph||'')+'" data-ed="'+k+'"></div>';
+  return '<div class="item" style="background:var(--surface2);border-radius:12px;padding:12px;margin-top:8px"><div class="label">Modifier la séance</div><div class="stack" style="margin-top:8px">'
+    +f('name','Nom','text','ex. Test 6 min')+'<div class="grid2">'+f('date','Date','date')+f('dur','Durée (mm:ss)','text','18:05')+f('dist','Distance (km)','text','3,04')+f('rpe','Ressenti (1 à 10)','number')+'</div>'
+    +'<div class="label" style="margin-top:4px">Points clés du fractionné</div><div class="grid2">'+f('reps','Répétitions faites','number')+f('effSec','Temps moyen d\u2019effort (mm:ss ou s)','text','27')+f('effDist','Distance moyenne d\u2019effort (m)','number','100')+'</div>'
+    +f('note','Note','text','Ce que tu veux retenir')+'<div class="hint">Les modifications sont descriptives : elles ne refont pas le calcul de progression.</div>'
+    +'<div class="row"><button class="btn primary sm" data-act="edit-save">Enregistrer</button><button class="btn sm" data-act="edit-cancel">Annuler</button></div></div></div>';
+}
+function saveEdit(){
+  const e=editDraft,l=S.logs.find(x=>x.id===e.id);if(!l)return true;
+  const num=x=>{const n=parseFloat(String(x).replace(',','.'));return isFinite(n)?n:null;};
+  if(String(e.dur).trim()&&parseDur(e.dur)==null){toast('Durée illisible : écris 18:05 ou 33.');return false;}
+  if(e.rpe!==''&&!(num(e.rpe)>=1&&num(e.rpe)<=10)){toast('Ressenti : un nombre de 1 à 10.');return false;}
+  l.name=e.name.trim();l.date=e.date||l.date;
+  const sec=parseDur(e.dur);l.durSec=sec;l.durMin=sec==null?null:sec/60;
+  l.distKm=num(e.dist);l.repsDone=e.reps===''?null:num(e.reps);
+  const ks=e.effSec===''?null:parseDur(/^[\d.,]+$/.test(e.effSec.trim())?(num(e.effSec)/60)+'':e.effSec),kd=num(e.effDist);
+  l.kp=(ks||kd)?{sec:ks,dist:kd}:null;
+  l.rpe=e.rpe===''?null:Math.round(num(e.rpe));l.note=e.note.trim();
+  save();toast('Séance modifiée.');return true;
 }
 function logRow(l){
-  const nm=l.kind==='hand'?'Hand':l.kind==='other'?'Autre séance':(l.key?{sat:'Fractionné',tue:'Fractionné doux',thu:'Footing facile'}[l.key]:'Fractionné');
-  let det=[];
-  if(l.durMin)det.push(l.durMin+' min');
-  if(l.distKm)det.push(l.distKm.toFixed(1).replace('.',',')+' km');
-  if(l.repsDone!=null&&l.kind==='run'&&l.repsPlanned)det.push(l.repsDone+'/'+l.repsPlanned+' rép.');
-  if(l.avgPace)det.push('effort '+fmtPace(l.avgPace)+'/km');
-  if(l.hrAvg)det.push('FC '+l.hrAvg+(l.hrMax?'/'+l.hrMax:''));
+  const det=logDetails(l);
   const vp={facile:'good',bien:'good',dur:'warn','trop dur':'bad'}[l.verdict]||'';
-  let h='<div class="item"><div class="row between"><div><b>'+esc(nm)+'</b> <span class="muted small">'+esc(frShort(l.date))+'</span></div><div class="row">'+(l.verdict?'<span class="pill '+vp+'">'+esc(l.verdict)+'</span>':'')+(l.rpe?'<span class="pill">'+l.rpe+'/10</span>':'')+'</div></div>';
+  let h='<div class="item"><div class="row between"><div><b>'+esc(logTitle(l))+'</b> <span class="muted small">'+esc(frShort(l.date))+'</span></div><div class="row">'+(l.verdict?'<span class="pill '+vp+'">'+esc(l.verdict)+'</span>':'')+(l.rpe?'<span class="pill">'+l.rpe+'/10</span>':'')+'</div></div>';
   if(det.length)h+='<div class="small muted tnum">'+esc(det.join(' · '))+'</div>';
+  const kp=keyPointsLine(l);if(kp)h+='<div class="small muted tnum">'+esc(kp)+'</div>';
   if(l.note)h+='<div class="small muted">'+esc(l.note)+'</div>';
-  h+=delArm===l.id?'<div class="row small" style="margin-top:6px"><span>Supprimer cette entrée ?</span><button class="btn sm" data-act="del-log" data-id="'+l.id+'">Oui, supprimer</button><button class="btn sm" data-act="del-no">Non</button></div>':'';
+  if(editDraft&&editDraft.id===l.id)return h+editForm(l)+'</div>';
   if(readTracks()[l.id])h+=traceOpen===l.id?traceSvg(l.id)+'<div class="row small" style="margin-top:6px"><button class="btn sm" data-act="trace-hide">Masquer le tracé</button></div>':'<div class="row small" style="margin-top:6px"><button class="btn sm" data-act="trace-show" data-id="'+l.id+'">Voir le tracé</button></div>';
   if(!l.rpe)h+='<div class="row small"><label for="rp-'+l.id+'">Ressenti ?</label><select id="rp-'+l.id+'" data-act="set-rpe" data-id="'+l.id+'" style="min-height:36px;border-radius:8px;border:1px solid var(--line);background:var(--surface);padding:4px 8px"><option value="">–</option>'+[1,2,3,4,5,6,7,8,9,10].map(n=>'<option>'+n+'</option>').join('')+'</select></div>';
-  if(delArm!==l.id)h+='<div class="row small" style="margin-top:4px"><button class="btn sm" data-act="del-ask" data-id="'+l.id+'">Supprimer</button></div>';
+  h+=delArm===l.id?'<div class="row small" style="margin-top:6px"><span>Mettre à la corbeille ?</span><button class="btn sm" data-act="del-log" data-id="'+l.id+'">Oui</button><button class="btn sm" data-act="del-no">Non</button></div>':'<div class="row small" style="margin-top:6px"><button class="btn sm" data-act="edit-log" data-id="'+l.id+'">Modifier</button><button class="btn sm" data-act="del-ask" data-id="'+l.id+'">Supprimer</button></div>';
   return h+'</div>';
 }
 
@@ -1016,7 +1118,7 @@ function viewSettings(){
    +'<div class="hint" style="margin-top:8px">« Partager » envoie le fichier vers Drive, Gmail, Keep… depuis le menu Android. Ton jeton GitHub n\u2019est jamais inclus dans la sauvegarde.</div>'
    +'<div class="sep" style="margin:14px 0"></div>'
    +(confirmReset?'<div class="banner bad"><div><b>Tout effacer ?</b> Cette action est définitive.<div class="row" style="margin-top:8px"><button class="btn sm danger" data-act="reset-ok">Oui, effacer</button><button class="btn sm" data-act="reset-cancel">Annuler</button></div></div></div>':'<button class="btn sm danger" data-act="reset">Effacer toutes les données</button>')+'</div>';
-  h+='<div class="card flat small muted">Les fichiers GPX sont lus dans ton téléphone et jamais envoyés. Seuls les chiffres sont gardés, plus un tracé allégé en mètres depuis le départ (sans coordonnées GPS) qui reste sur ce téléphone et n\u2019est ni exporté ni sauvegardé. Souffle v1.5 (tracé).</div>';
+  h+='<div class="card flat small muted">Les fichiers GPX sont lus dans ton téléphone et jamais envoyés. Seuls les chiffres sont gardés, plus un tracé allégé en mètres depuis le départ (sans coordonnées GPS) qui reste sur ce téléphone et n\u2019est ni exporté ni sauvegardé. Souffle v1.7 (tests VMA).</div>';
   return h+'</div>';
 }
 
@@ -1066,17 +1168,27 @@ async function takeSharedFile(){
 
 /* ---- Bilan ---- */
 function newDraft(kind,sess){
-  const d={kind:kind,sessionId:sess?sess.id:null,date:sess?(sess.date<=todayStr()?sess.date:todayStr()):todayStr(),durMin:kind==='hand'?60:'',distKm:'',repsDone:sess&&sess.kind==='intervals'?sess.n:'',avgPace:'',firstPace:'',lastPace:'',
+  const d={kind:kind,sessionId:sess?sess.id:null,date:sess?(sess.date<=todayStr()?sess.date:todayStr()):todayStr(),durMin:kind==='hand'?'60':'',name:'',distKm:'',repsDone:sess&&sess.kind==='intervals'?sess.n:'',avgPace:'',firstPace:'',lastPace:'',
     hrAvg:'',hrMax:'',rpe:null,reason:'',painZone:'',painLevel:'',gpxMsg:'',gpxRes:null};
-  if(sess&&sess.kind==='easy')d.durMin=sess.minutes;
+  if(sess&&sess.kind==='easy')d.durMin=String(sess.minutes);
+  d.testType='6min';d.testDist='';
+  if(sess&&sess.kind==='test'){d.kind='test';d.durMin='';}
   return d;
 }
 function viewLog(){
   const d=draft;const sess=d.sessionId?sessionById(d.sessionId):null;
   let h='<div class="top"><div class="brand">Bilan</div><button class="btn sm" data-act="cancel-log">Fermer</button></div><div class="stack">';
-  h+='<div class="card"><div class="seg">'+[['run','Séance du plan'],['hand','Hand'],['other','Autre']].map(o=>'<button data-act="kind" data-v="'+o[0]+'" aria-pressed="'+(d.kind===o[0])+'" '+(o[0]==='run'&&!sess?'disabled':'')+'>'+o[1]+'</button>').join('')+'</div>';
-  if(sess&&d.kind==='run')h+='<div class="small muted" style="margin-top:10px">'+esc(sess.title)+' · '+esc(sessionSummary(sess))+'</div>';
-  h+='<div class="grid2" style="margin-top:12px"><div class="field"><label for="lg-date">Date</label><input id="lg-date" type="date" value="'+d.date+'" data-f="date"></div><div class="field"><label for="lg-dur">Durée (min)</label><input id="lg-dur" type="number" inputmode="numeric" value="'+esc(d.durMin)+'" data-f="durMin"></div></div></div>';
+  h+='<div class="card"><div class="seg">'+[['run','Séance du plan'],['test','Test VMA'],['hand','Hand'],['other','Autre']].map(o=>'<button data-act="kind" data-v="'+o[0]+'" aria-pressed="'+(d.kind===o[0])+'" '+(o[0]==='run'&&(!sess||sess.kind==='test')?'disabled':'')+'>'+o[1]+'</button>').join('')+'</div>';
+  if(sess&&(d.kind==='run'||d.kind==='test'))h+='<div class="small muted" style="margin-top:10px">'+(sess.kind==='test'?'':esc(sess.title)+' · ')+esc(sessionSummary(sess))+'</div>';
+  h+='<div class="field" style="margin-top:12px"><label for="lg-name">Nom de la séance (facultatif)</label><input id="lg-name" type="text" placeholder="ex. Test 6 min, Côte, Piste" value="'+esc(d.name||'')+'" data-f="name"></div>';
+  h+='<div class="grid2" style="margin-top:12px"><div class="field"><label for="lg-date">Date</label><input id="lg-date" type="date" value="'+d.date+'" data-f="date"></div><div class="field"><label for="lg-dur">Durée (mm:ss)</label><input id="lg-dur" type="text" inputmode="text" placeholder="18:05" value="'+esc(d.durMin)+'" data-f="durMin"></div></div></div>';
+  if(d.kind==='test'){
+    const dv=parseFloat(String(d.testDist).replace(',','.'));
+    h+='<div class="card"><div class="label">Test VMA</div><div class="seg" style="margin-top:8px">'+Object.keys(TEST_TYPES).map(k=>'<button data-act="ttype" data-v="'+k+'" aria-pressed="'+(d.testType===k)+'">'+TEST_TYPES[k].lab+'</button>').join('')+'</div>'
+      +'<div class="field" style="margin-top:12px"><label for="lg-td">Distance parcourue pendant le test (m)</label><input id="lg-td" type="text" inputmode="numeric" value="'+esc(d.testDist)+'" data-f="testDist"></div>'
+      +(dv>200?'<div class="banner good" style="margin-top:10px"><div>VMA estimée : <b>'+fmtKmh(vmaOf(d.testType,dv))+' km/h</b> (allure à 100 % : '+fmtPace(3600/vmaOf(d.testType,dv))+'/km)</div></div>':'')
+      +'<div class="hint" style="margin-top:8px">VMA ≈ distance du 6 min ÷ 100 (ou du 12 min ÷ 200) en km/h. Le GPX d\u2019une séance complète est lu : les meilleures minutes sont retrouvées automatiquement.</div></div>';
+  }
   if(d.kind!=='hand'){
     h+='<div class="card"><div class="label">Données de la montre</div>'
       +'<div class="field" style="margin-top:10px"><label for="gpx">Importer le GPX de Mi Fitness (facultatif)</label><input id="gpx" type="file"></div>'
@@ -1137,15 +1249,36 @@ function nextAfter(s){
   for(let w=s.wk+1;w<=detailedWeeks();w++){const n=buildSession(w,s.key,{noToday:true});if(n)return {when:'Semaine '+w+' · '+frDate(n.date,{weekday:'long',day:'numeric',month:'long'}),what:sessionSummary(n)};}
   return null;
 }
+function trashLog(id){
+  const l=S.logs.find(x=>x.id===id);if(!l)return;
+  const fx=l.fx||(l.delta&&l.key?{[l.key]:l.delta}:{});
+  ['sat','tue','thu'].forEach(k=>{if(fx[k])S.offsets[k]=clamp((S.offsets[k]||0)-fx[k],-2,2);});
+  S.logs=S.logs.filter(x=>x!==l);S.trash=(S.trash||[]).concat([Object.assign({},l,{delAt:todayStr()})]);
+}
+function restoreLog(id){
+  const l=(S.trash||[]).find(x=>x.id===id);if(!l)return false;
+  if(l.sessionId&&logFor(l.sessionId)){toast('Cette séance du plan a déjà un autre bilan : mets-le à la corbeille d\u2019abord.');return false;}
+  const fx=l.fx||(l.delta&&l.key?{[l.key]:l.delta}:{});
+  ['sat','tue','thu'].forEach(k=>{if(fx[k])S.offsets[k]=clamp((S.offsets[k]||0)+fx[k],-2,2);});
+  S.trash=S.trash.filter(x=>x!==l);const c=Object.assign({},l);delete c.delAt;S.logs.push(c);return true;
+}
 function findDup(date,dur,dist){
   return S.logs.find(l=>l.date===date&&Math.abs((l.durMin||0)-(dur||0))<=2&&Math.abs((l.distKm||0)-(dist||0))<=0.25);
 }
 function saveLog(){
   const d=draft;const sess=d.sessionId?sessionById(d.sessionId):null;
   const num=x=>{const n=parseFloat(String(x).replace(',','.'));return isFinite(n)?n:null;};
-  const log={id:'l'+Date.now(),kind:d.kind==='run'?'run':d.kind,key:null,sessionId:null,date:d.date,durMin:num(d.durMin),distKm:num(d.distKm),
+  const log={id:'l'+Date.now(),kind:d.kind==='run'?'run':d.kind,key:null,sessionId:null,date:d.date,durSec:parseDur(d.durMin),durMin:parseDur(d.durMin)==null?null:parseDur(d.durMin)/60,name:(d.name||'').trim(),distKm:num(d.distKm),
     repsDone:null,repsPlanned:null,avgPace:parsePace(d.avgPace),firstPace:parsePace(d.firstPace),lastPace:parsePace(d.lastPace),
     hrAvg:num(d.hrAvg),hrMax:num(d.hrMax),rpe:d.rpe,reason:d.reason,verdict:null,delta:0,source:d.gpxRes?'gpx':'manuel',note:''};
+  if(String(d.durMin).trim()&&log.durSec==null){toast('Durée illisible : écris 18:05 ou 33 (minutes).');return;}
+  if(d.kind==='test'){
+    const dist=parseFloat(String(d.testDist).replace(',','.'));
+    if(!(dist>200&&dist<6000)){toast('Indique la distance parcourue pendant le test, en mètres.');return;}
+    const vma=Math.round(vmaOf(d.testType,dist)*10)/10;
+    log.test={type:d.testType,distM:Math.round(dist),vma:vma};
+    if(sess&&sess.kind==='test'){log.sessionId=sess.id;}
+  }
   let notes=[];let label=null;
   if(d.gpxRes){
     const dup=findDup(log.date,log.durMin,log.distKm);
@@ -1154,10 +1287,16 @@ function saveLog(){
   }
   if(d.kind==='run'&&sess){
     log.key=sess.key;log.sessionId=sess.id;
-    if(sess.kind==='intervals'){log.repsDone=num(d.repsDone);log.repsPlanned=sess.n;}
+    if(sess.kind==='intervals'){log.repsDone=num(d.repsDone);log.repsPlanned=sess.n;log.effT=sess.eff.t;log.effLabel=sess.eff.t==='time'?(sess.eff.v%60===0?sess.eff.v/60+' min':sess.eff.v+' s'):sess.eff.v+' m';
+      if(d.gpxRes&&d.gpxRes.reps&&d.gpxRes.reps.length)log.reps=d.gpxRes.reps.map(r=>[Math.round(r.sec*10)/10,Math.round(r.dist)]);}
     const res=judge(sess,{rpe:d.rpe,repsDone:log.repsDone,avgPace:log.avgPace,firstPace:log.firstPace,lastPace:log.lastPace,reason:d.reason});
     if(d.rpe!=null){notes=applyJudgement(sess,res,log);}else{notes=res.notes;}
     label=log.verdict;
+  }else if(d.kind==='test'){
+    const prev=vmaTests().filter(x=>x.id!==log.id).pop();
+    notes.push('Test VMA enregistré : '+fmtKmh(log.test.vma)+' km/h, soit '+fmtPace(3600/log.test.vma)+'/km à 100 %.');
+    if(prev)notes.push('Test précédent ('+frShort(prev.date)+') : '+fmtKmh(prev.test.vma)+' km/h, écart '+(log.test.vma>=prev.test.vma?'+':'')+fmtKmh(log.test.vma-prev.test.vma)+' km/h.');
+    notes.push('Un test ne modifie pas les crans de progression. Va dans Suivi pour voir tes allures en pourcentage de VMA.');
   }else if(d.kind==='hand'){
     log.note='Hand';
     notes.push(d.rpe!=null&&log.durMin?'Charge du hand : '+Math.round(log.durMin*d.rpe)+' (durée × ressenti), comptée dans la semaine.':'Hand enregistré.');
@@ -1176,9 +1315,9 @@ async function handleGpx(file){
   const sess=d.sessionId?sessionById(d.sessionId):null;
   try{
     const txt=await file.text();const pts=parseGpx(txt);const a=analyseTrack(pts,d.kind==='run'?sess:null);
-    d.durMin=a.durMin;d.distKm=a.distKm.toFixed(2).replace('.',',');
+    d.durMin=fmtDur(a.durSec);d.distKm=a.distKm.toFixed(2).replace('.',',');
     const day=new Date(pts[0].t*1000);d.date=ymd(day);
-    let msg='GPX lu : '+a.durMin+' min, '+a.distKm.toFixed(1).replace('.',',')+' km, allure moyenne '+fmtPace(a.avgPace)+'/km. ';
+    let msg='GPX lu : '+fmtDur(a.durSec)+', '+a.distKm.toFixed(1).replace('.',',')+' km, allure moyenne '+fmtPace(a.avgPace)+'/km. ';
     if(sess&&sess.kind==='intervals'&&d.kind==='run'){
       if(a.reps.length){
         const paces=a.reps.map(r=>r.pace);const avg=a.reps.reduce((x,r)=>x+r.sec,0)/a.reps.reduce((x,r)=>x+r.dist/1000,0);
@@ -1187,6 +1326,11 @@ async function handleGpx(file){
       }else msg+='Aucune répétition détectée : saisis-les à la main.';
     }
     d.gpxRes=a;
+    if(d.kind==='test'){
+      const W=TEST_TYPES[d.testType].W;
+      if(a.durSec<W)msg+='Fichier trop court pour un test '+TEST_TYPES[d.testType].lab+'. ';
+      else{const bd=Math.round(a.win(W));d.testDist=String(bd);msg+='Meilleurs '+TEST_TYPES[d.testType].lab+' : '+bd+' m, soit une VMA ≈ '+fmtKmh(vmaOf(d.testType,bd))+' km/h. Vérifie la distance.';}
+    }
     const dup=findDup(d.date,a.durMin,a.distKm);
     if(dup)msg=(dup.sessionId?'Déjà enregistrée dans le suivi : l\u2019import sera refusé. ':'Cette course existe déjà dans l\u2019historique : elle sera remplacée, pas doublée. ')+msg;
     d.gpxMsg=esc(msg);
@@ -1208,7 +1352,12 @@ document.addEventListener('click',async ev=>{
     case 'trace-hide':traceOpen=null;break;
     case 'del-ask':delArm=id;break;
     case 'del-no':delArm=null;break;
-    case 'del-log':{S.logs=S.logs.filter(x=>x.id!==id);dropTrack(id);delArm=null;save();toast('Entrée supprimée. Si elle avait servi à la progression, les crans restent.');break;}
+    case 'del-log':{trashLog(id);delArm=null;save();toast('Mise à la corbeille : elle n\u2019influence plus le plan. Tu peux la restaurer.');break;}
+    case 'restore':{if(restoreLog(id)){save();toast('Séance restaurée.');}break;}
+    case 'purge':{S.trash=(S.trash||[]).filter(x=>x.id!==id);dropTrack(id);save();break;}
+    case 'edit-log':{const l=S.logs.find(x=>x.id===id);if(l)editDraft={id:id,name:l.name||'',date:l.date,dur:l.durSec!=null?fmtDur(l.durSec):(l.durMin?fmtDur(l.durMin*60):''),dist:l.distKm!=null?String(l.distKm).replace('.',','):'',reps:l.repsDone!=null?String(l.repsDone):'',effSec:l.kp&&l.kp.sec?fmtEffSec(l.kp.sec).replace(' s',''):'',effDist:l.kp&&l.kp.dist?String(l.kp.dist):'',rpe:l.rpe?String(l.rpe):'',note:l.note||''};break;}
+    case 'edit-cancel':editDraft=null;break;
+    case 'edit-save':{if(saveEdit())editDraft=null;break;}
     case 'newplan':newPlan=newPlanDraft();break;
     case 'np-type':newPlan.type=v;break;
     case 'np-level':newPlan.level=v;break;
@@ -1229,6 +1378,9 @@ document.addEventListener('click',async ev=>{
     case 'open-log-free':draft=newDraft('other',null);break;
     case 'log-hand':draft=newDraft('hand',null);break;
     case 'cancel-log':draft=null;break;
+    case 'vma-ref':{const v=lastVma();if(v){S.profile.refPace=Math.round(3600/(v*.66));save();toast('Allure de référence mise à jour : '+fmtPace(S.profile.refPace)+'/km.');}break;}
+    case 'ttype':draft.testType=v;if(draft.gpxRes&&draft.gpxRes.win&&draft.gpxRes.durSec>=TEST_TYPES[v].W)draft.testDist=String(Math.round(draft.gpxRes.win(TEST_TYPES[v].W)));break;
+    case 'open-test':draft=newDraft('test',null);break;
     case 'kind':draft.kind=v;draft.gpxMsg='';break;
     case 'rpe':draft.rpe=+v;break;
     case 'reason':draft.reason=draft.reason===v?'':v;break;
@@ -1277,6 +1429,7 @@ document.addEventListener('click',async ev=>{
 });
 document.addEventListener('input',ev=>{
   const t=ev.target;
+  if(t.hasAttribute&&t.hasAttribute('data-ed')&&editDraft){editDraft[t.getAttribute('data-ed')]=t.value;return;}
   if(t.hasAttribute('data-f')&&draft){draft[t.getAttribute('data-f')]=t.value;}
   if(t.id==='wx-q')wxQ=t.value;
 });
