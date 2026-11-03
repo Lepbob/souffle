@@ -160,7 +160,7 @@ function parsePace(t){
   const n=t.match(/^(\d{1,2})$/);if(n)return +n[1]*60;return null;
 }
 const fmtRest=s=>{const m=Math.floor(s/60),r=s%60;return m?(r?m+' min '+r:m+' min'):r+' s';};
-const fmtEff=e=>e.t==='time'?(e.v>=60?(e.v/60)+' min':e.v+' s'):e.v+' m';
+const fmtEff=e=>e.t==='time'?(e.v>=60?(e.v%60?Math.floor(e.v/60)+' min '+e.v%60:(e.v/60)+' min'):e.v+' s'):e.v+' m';
 
 /* ================= Plan : échelles de niveau ================= */
 const T=(v)=>({t:'time',v:v}), D=(v)=>({t:'dist',v:v});
@@ -172,27 +172,29 @@ const SAT=[
   {n:8,eff:T(120),rest:{s:60,m:'en trottinant'}},
   {n:6,eff:T(180),rest:{s:90,m:'en trottinant'}},
   {n:6,eff:T(180),rest:{s:60,m:'en trottinant'}},
-  {n:5,eff:T(240),rest:{s:90,m:'en trottinant'}}
+  {n:5,eff:T(240),rest:{s:90,m:'en trottinant'}},
+  {n:12,eff:T(60),rest:{s:60,m:'en trottinant'}},
+  {n:14,eff:T(60),rest:{s:60,m:'en trottinant'}}
 ];
 const TUE=[
-  {n:6,eff:D(100),rest:{s:60,m:'en marchant'}},
-  {n:8,eff:D(100),rest:{s:60,m:'en trottinant'}},
-  {n:6,eff:D(200),rest:{s:90,m:'en trottinant'}},
-  {n:8,eff:D(200),rest:{s:75,m:'en trottinant'}},
-  {n:5,eff:D(400),rest:{s:90,m:'en trottinant'}}
+  {n:5,eff:T(60),rest:{s:90,m:'en marchant'}},
+  {n:6,eff:T(60),rest:{s:90,m:'en trottinant'}},
+  {n:8,eff:T(60),rest:{s:90,m:'en trottinant'}},
+  {n:6,eff:T(90),rest:{s:90,m:'en trottinant'}},
+  {n:5,eff:T(120),rest:{s:120,m:'en trottinant'}}
 ];
 const THU=[20,25,30,35];
 const LADDER={sat:SAT,tue:TUE};
-const BASE={sat:[1,2,3,1],tue:[0,1,2,0],thu:[0,1,2,0]};        // semaines 1 à 4 (la 4 est une semaine d'allègement)
-const PLAN_WEEKS=4;
+const BASE={sat:[1,2,3,1,2,8,9,1],tue:[0,1,2,0,2,3,3,1],thu:[0,1,2,0,2,3,3,1]};        // semaines 1 à 8 (les semaines 4 et 8 sont des allègements)
+const PLAN_WEEKS=8;
 const ROLE={tue:'mod',thu:'light',sat:'key'};
 const ROLE_NAME={key:'Séance clé',mod:'Qualité modérée',light:'Léger',hand:'Hand'};
 const DOW={tue:1,wed:2,thu:3,sat:5};
 const EXPECT_RPE={sat:7,tue:5,thu:3};
 const PHASES=[
   {n:1,w:[1,4],name:'Reprise',goal:'Base d\u2019endurance, habituer le corps.',txt:'Footing continu, fractionné court très facile, renforcement léger.'},
-  {n:2,w:[5,8],name:'Développement',goal:'Monter la capacité à haute intensité.',txt:'30/30 (en distance), 1 min/1 min, tempo court.'},
-  {n:3,w:[9,12],name:'Spécifique hand',goal:'Imiter l\u2019effort du match.',txt:'15/15 (en distance), répétitions de sprints courts, changements de direction, sauts.'},
+  {n:2,w:[5,8],name:'Développement',goal:'Monter la capacité à haute intensité.',txt:'Répétitions courtes : 1 min d\u2019effort / 1 min de récupération, jusqu\u2019à 14 répétitions, puis efforts de 2 à 3 min. Tout se programme à la durée sur la montre.'},
+  {n:3,w:[9,12],name:'Spécifique hand',goal:'Imiter l\u2019effort du match.',txt:'Efforts d\u20191 min en alternance, sprints courts sans montre (repères au sol), changements de direction, sauts.'},
   {n:4,w:[13,16],name:'Consolidation',goal:'Tenir 60 minutes.',txt:'Blocs d\u2019intermittent de 10 à 15 min, séance « simulation de match ».'}
 ];
 const MAINT_PHASE={n:0,w:[1,12],name:'Maintien',goal:'Conserver la forme obtenue.',txt:'Deux séances par semaine (mardi et samedi) à niveau modéré constant, allégées la 4e semaine. Le hand du mercredi reste dans la charge.'};
@@ -215,7 +217,7 @@ const RENFO=[
   'Équilibre sur une jambe : 3 × 30 s par jambe (puis yeux fermés)'
 ];
 const PACE_FACTOR={t:{60:.74,120:.80,180:.83,240:.85},d:{100:.78,200:.80,400:.83}};
-function targetPace(ref,e){const f=(e.t==='time'?PACE_FACTOR.t:PACE_FACTOR.d)[e.v]||.8;return ref*f;}
+function targetPace(ref,e,key){const f=(e.t==='time'?PACE_FACTOR.t:PACE_FACTOR.d)[e.v]||.8;return ref*f*(key==='tue'?1.07:1);}
 function ladderLabel(key,lvl){
   if(key==='thu')return THU[clamp(lvl,0,THU.length-1)]+' min de footing facile + renforcement';
   const L=LADDER[key][clamp(lvl,0,LADDER[key].length-1)];
@@ -241,9 +243,19 @@ function defaults(){
 }
 let S=load();
 function load(){
-  try{const r=localStorage.getItem(KEY);if(r){const o=JSON.parse(r);if(o&&o.v===1){const d=defaults();return Object.assign(d,o,{profile:Object.assign(d.profile,o.profile||{}),offsets:Object.assign(d.offsets,o.offsets||{}),sync:Object.assign(d.sync,o.sync||{})});}}}
+  try{const r=localStorage.getItem(KEY);if(r){const o=JSON.parse(r);if(o&&o.v===1){const d=defaults();return fix18(Object.assign(d,o,{profile:Object.assign(d.profile,o.profile||{}),offsets:Object.assign(d.offsets,o.offsets||{}),sync:Object.assign(d.sync,o.sync||{})}));}}}
   catch(e){memOnly=true;}
   return defaults();
+}
+function fix18(x){
+  if(x.fix18)return x;
+  (x.logs||[]).forEach(l=>{
+    if(l.sessionId&&(l.key==='sat'||l.key==='tue')&&l.repsDone==null&&l.fx&&Object.keys(l.fx).length){
+      Object.keys(l.fx).forEach(k=>{x.offsets[k]=Math.max(-2,Math.min(2,(x.offsets[k]||0)-l.fx[k]));});
+      l.fx={};l.delta=0;l.verdict=null;l.note=((l.note?l.note+' ':'')+'Footing à la place du fractionné : sans effet sur la progression (corrigé en v1.8).').trim();
+    }
+  });
+  x.fix18=true;return x;
 }
 function save(){try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){memOnly=true;}scheduleSync();}
 
@@ -314,7 +326,7 @@ function buildSession(wk,key,opts){
     done:!!logFor(id),skipped:!!S.skips[id],phase:phaseOf(wk)};
   const ref=S.profile.refPace;
   if(kind==='intervals'){
-    const L=LADDER[key][lvl];s.n=L.n;s.eff=L.eff;s.rest=L.rest;s.pace=targetPace(ref,L.eff)*wxSlow;
+    const L=LADDER[key][lvl];s.n=L.n;s.eff=L.eff;s.rest=L.rest;s.pace=targetPace(ref,L.eff,key)*wxSlow;
     s.rpeTarget=key==='sat'?'8 sur 10':'6 à 7 sur 10, jamais plus (veille de hand)';
     s.warm=10;s.cool=5;
   }else if(kind==='test'){
@@ -334,10 +346,10 @@ function watchSteps(s){
     'Retour au calme : 10 min de footing très facile ou de marche.'
   ];
   if(s.kind==='easy')return ['Séance « course libre » (chrono libre) : '+s.minutes+' min à allure très facile.','Allure indicative '+fmtPace(s.pace)+'/km, mais le critère est de pouvoir parler.'];
-  const eff=s.eff.t==='time'?fmtEff(s.eff):fmtEff(s.eff)+' (distance, en centaines de mètres)';
+  const eff=fmtEff(s.eff);
   return [
-    'Échauffement : chrono libre, environ '+s.warm+' min de footing facile + 3 accélérations de 10 s. Tu valides sur la montre quand tu es prêt.',
-    'Répétitions : '+s.n+' ×, effort '+eff+', repos '+fmtRest(s.rest.s)+' ('+s.rest.m.replace('en ','')+').',
+    'Échauffement : le chrono libre de la montre, environ '+s.warm+' min de footing très facile + 3 accélérations de 10 s. Quand tu es prêt, appuie pour lancer les répétitions (l\u2019échauffement n\u2019est pas compté dans le bilan).',
+    'Répétitions : '+s.n+' ×, effort '+eff+', repos '+fmtRest(s.rest.s)+' ('+s.rest.m.replace('en ','')+'). Programme l\u2019effort ET le repos en durée, jamais en distance : la montre arrête le repos à la fin de la distance.',
     'Allure visée à l\u2019effort : environ '+fmtPace(s.pace)+'/km, ressenti '+s.rpeTarget+'.',
     'Retour au calme : si ta montre ne le programme pas, continue en footing libre ou en marchant pendant '+s.cool+' min.'
   ];
@@ -347,6 +359,7 @@ const sessionSummary=s=>s.kind==='test'?'Test VMA · '+TEST_TYPES[s.testType].la
 /* ================= Jugement d'une séance ================= */
 function judge(s,d){
   const notes=[];let easy=0,hard=0;
+  if(s.kind==='easy'&&s.key!=='thu')return {label:null,notes:['Séance transformée en footing (douleur ou météo) : elle ne modifie pas le plan.'],delta:0};
   if(d.rpe==null)return {label:null,notes:['Ressenti manquant : la séance est enregistrée mais ne modifie pas le plan.'],delta:0};
   const exp=EXPECT_RPE[s.key];
   if(s.kind==='intervals'&&d.repsDone!=null){
@@ -455,6 +468,7 @@ function analyseTrack(pts,plan){
   if(reps.length>plan.n){reps=reps.slice().sort((x,y)=>y.avgSpeed-x.avgSpeed).slice(0,plan.n).sort((x,y)=>x.at-y.at);res.extra=out.length-plan.n;}
   res.reps=reps;
   res.repWin=reps.map(r=>[Math.round(r.t0),Math.round(r.t0+r.sec)]);
+  if(reps.length){const w0=Math.min.apply(null,reps.map(r=>r.t0)),w1=Math.max.apply(null,reps.map(r=>r.t0+r.sec));res.work={t0:w0,t1:w1,durSec:Math.round(w1-w0),distKm:(distAt(w1)-distAt(w0))/1000};}
   return res;
 }
 
@@ -576,7 +590,7 @@ async function syncPull(){
   finally{syncBusy=false;render();}
 }
 function applyRestore(){
-  const o=confirmRestore.o,cfg=S.sync;S=Object.assign(defaults(),o);S.sync=Object.assign({},defaults().sync,o.sync||{},cfg);
+  const o=confirmRestore.o,cfg=S.sync;S=fix18(Object.assign(defaults(),o));S.sync=Object.assign({},defaults().sync,o.sync||{},cfg);
   confirmRestore=null;lastPushed='';writeMeta({blocked:false,lastErr:null});save();
 }
 async function shareBackup(){
@@ -784,9 +798,9 @@ function viewToday(){
   if(wk<1){h+='<div class="banner info"><div><b>Ton plan démarre le lundi '+esc(frDate(P().start,{day:'numeric',month:'long'}))+'.</b> Voici la première séance.</div></div>';}
   const p=painState(today);
   if(p&&p.level!=='legere')h+='<div class="banner '+(p.level==='douleur'?'warn':'bad')+'"><div><b>'+esc(PAIN_LV[p.level]?PAIN_LV[p.level].n:'Douleur persistante')+' ('+esc(p.zone.toLowerCase())+').</b> Les séances intenses sont retirées jusqu\u2019au '+esc(frShort(p.until))+'.'+(p.level==='forte'||p.level==='persistante'?' Un avis médical est conseillé.':'')+'</div></div>';
-  if(dow===3&&wk>=1)h+='<div class="card row between"><div><div class="label">Aujourd\u2019hui</div><div><b>Hand ce soir ?</b> <span class="muted">Note-le après le match pour la charge.</span></div></div><button class="btn sm" data-act="log-hand">Noter le hand</button></div>';
+  if(dow===3&&wk>=1)h+='<div class="card row between"><div><div class="label">Aujourd\u2019hui</div><div><b>Hand ce soir ?</b> <span class="muted">Note-le après le match pour la charge.</span></div></div><div class="row"><button class="btn sm primary" data-act="hand-quick">Hand loisir 1 h · 4/10</button><button class="btn sm" data-act="log-hand">Détailler</button></div></div>';
   overdue.forEach(o=>{h+='<div class="banner warn"><div><b>'+esc(frDate(o.date,{weekday:'long'}))+' : séance non faite</b> ('+esc(sessionSummary(o))+'). Pas de rattrapage en double : fais-la ou saute-la.<div class="row" style="margin-top:8px"><button class="btn sm" data-act="open-log" data-id="'+o.id+'">La noter</button><button class="btn sm" data-act="move" data-id="'+o.id+'">Déplacer</button><button class="btn sm" data-act="skip" data-id="'+o.id+'">Sauter</button></div></div></div>';});
-  if(!s){h+='<div class="card"><h2>Pas de séance détaillée à venir</h2><p class="muted">'+(P().type==='maintien'?'Ce plan de maintien est terminé.':'La phase 1 (semaines 1 à 4) est détaillée. Les phases suivantes seront à définir ensemble après ton premier bilan.')+'</p><div class="row" style="margin-top:8px"><button class="btn sm" data-act="tab" data-v="plan">Voir le plan</button><button class="btn sm" data-act="newplan">Reprogrammer un plan</button></div></div>';}
+  if(!s){h+='<div class="card"><h2>Pas de séance détaillée à venir</h2><p class="muted">'+(P().type==='maintien'?'Ce plan de maintien est terminé.':'Les phases 1 et 2 (semaines 1 à 8) sont détaillées. Les suivantes seront à définir ensemble.')+'</p><div class="row" style="margin-top:8px"><button class="btn sm" data-act="tab" data-v="plan">Voir le plan</button><button class="btn sm" data-act="newplan">Reprogrammer un plan</button></div></div>';}
   else{
     const isToday=s.date===today;
     h+=sessionHero(s,isToday);
@@ -927,7 +941,7 @@ function maintenanceCards(){
   const pl=P();
   let h='<div class="card"><h2>Plan de maintien</h2><p class="muted" style="margin:6px 0 0">'+esc(MAINT_PHASE.goal+' '+MAINT_PHASE.txt)+'</p></div><div class="card"><div class="label">Semaines 1 à 4, répétées jusqu’à la semaine '+pl.weeks+'</div>';
   for(let w=1;w<=4;w++){
-    h+='<div class="sep" style="margin:12px 0 8px"></div><div class="row between"><b>Semaine '+w+(w===4?' · allègement':'')+'</b><span class="muted small">'+esc(frDate(weekStart(w),{day:'numeric',month:'short'}))+'</span></div>';
+    h+='<div class="sep" style="margin:12px 0 8px"></div><div class="row between"><b>Semaine '+w+(w===4?' · allègement':w===8?' · allègement et test VMA':'')+'</b><span class="muted small">'+esc(frDate(weekStart(w),{day:'numeric',month:'short'}))+'</span></div>';
     weekSessions(w,{noToday:true}).forEach(s=>{h+=planItem(s);});
   }
   return h+'</div>';
@@ -974,16 +988,16 @@ function viewPlan(){
   if(P().type==='maintien'){h+=maintenanceCards();return h+plansHistory()+'</div>';}
   h+='<div class="card"><h2>4 mois, 4 phases</h2><p class="muted" style="margin:6px 0 0">Objectif : tenir 60 minutes de hand à haute intensité. Une semaine d\u2019allègement toutes les 4 semaines.</p></div>';
   PHASES.forEach(p=>{
-    h+='<div class="card"><div class="row between"><div><div class="label">Phase '+p.n+' · semaines '+p.w[0]+' à '+p.w[1]+'</div><h3 style="font-size:20px;margin-top:2px">'+esc(p.name)+'</h3></div>'+(p.n===1?'<span class="pill good">Détaillée</span>':'<span class="pill">À détailler</span>')+'</div><div class="muted" style="margin-top:6px">'+esc(p.goal)+' '+esc(p.txt)+'</div>';
-    if(p.n===1){
+    h+='<div class="card"><div class="row between"><div><div class="label">Phase '+p.n+' · semaines '+p.w[0]+' à '+p.w[1]+'</div><h3 style="font-size:20px;margin-top:2px">'+esc(p.name)+'</h3></div>'+(p.n<=2?'<span class="pill good">Détaillée</span>':'<span class="pill">À détailler</span>')+'</div><div class="muted" style="margin-top:6px">'+esc(p.goal)+' '+esc(p.txt)+'</div>';
+    if(p.n<=2){
       for(let w=p.w[0];w<=p.w[1];w++){
-        h+='<div class="sep" style="margin:12px 0 8px"></div><div class="row between"><b>Semaine '+w+(w===4?' · allègement':'')+'</b><span class="muted small">'+esc(frDate(weekStart(w),{day:'numeric',month:'short'}))+'</span></div>';
+        h+='<div class="sep" style="margin:12px 0 8px"></div><div class="row between"><b>Semaine '+w+(w===4?' · allègement':w===8?' · allègement et test VMA':'')+'</b><span class="muted small">'+esc(frDate(weekStart(w),{day:'numeric',month:'short'}))+'</span></div>';
         weekSessions(w,{noToday:true}).forEach(s=>{h+='<div class="item" style="padding:8px 0"><div class="row between"><span>'+esc(frDate(s.date,{weekday:'short'}))+' · '+esc(s.title)+'</span>'+(s.done?'<span class="pill good">Fait</span>':s.skipped?'<span class="pill">Sautée</span>':rolePill(s))+'</div><div class="small muted">'+esc(sessionSummary(s))+'</div></div>';});
       }
     }
     h+='</div>';
   });
-  h+='<div class="card flat small muted">Les niveaux affichés tiennent déjà compte de tes séances passées. La phase 1 est une proposition de départ : dis-moi ce qu\u2019il faut corriger.</div>';
+  h+='<div class="card flat small muted">Les niveaux affichés tiennent déjà compte de tes séances passées. Les phases 1 et 2 sont des propositions de départ : dis-moi ce qu\u2019il faut corriger.</div>';
   return h+plansHistory()+'</div>';
 }
 
@@ -1047,6 +1061,7 @@ function logDetails(l){
   if(secs)det.push(fmtDur(secs));
   if(l.distKm)det.push(l.distKm.toFixed(2).replace('.',',')+' km');
   if(secs&&l.distKm)det.push('allure '+fmtPace(secs/l.distKm)+'/km');
+  if(l.totalSec&&l.totalSec!==l.durSec)det.push('échauffement exclu (montre : '+fmtDur(l.totalSec)+')');
   if(l.test)det.push(l.test.distM+' m · VMA '+fmtKmh(l.test.vma)+' km/h');
   if(l.repsDone!=null&&l.kind!=='hand'&&l.repsPlanned)det.push(l.repsDone+'/'+l.repsPlanned+' rép.');
   if(l.avgPace)det.push('efforts '+fmtPace(l.avgPace)+'/km');
@@ -1118,7 +1133,7 @@ function viewSettings(){
    +'<div class="hint" style="margin-top:8px">« Partager » envoie le fichier vers Drive, Gmail, Keep… depuis le menu Android. Ton jeton GitHub n\u2019est jamais inclus dans la sauvegarde.</div>'
    +'<div class="sep" style="margin:14px 0"></div>'
    +(confirmReset?'<div class="banner bad"><div><b>Tout effacer ?</b> Cette action est définitive.<div class="row" style="margin-top:8px"><button class="btn sm danger" data-act="reset-ok">Oui, effacer</button><button class="btn sm" data-act="reset-cancel">Annuler</button></div></div></div>':'<button class="btn sm danger" data-act="reset">Effacer toutes les données</button>')+'</div>';
-  h+='<div class="card flat small muted">Les fichiers GPX sont lus dans ton téléphone et jamais envoyés. Seuls les chiffres sont gardés, plus un tracé allégé en mètres depuis le départ (sans coordonnées GPS) qui reste sur ce téléphone et n\u2019est ni exporté ni sauvegardé. Souffle v1.7 (tests VMA).</div>';
+  h+='<div class="card flat small muted">Les fichiers GPX sont lus dans ton téléphone et jamais envoyés. Seuls les chiffres sont gardés, plus un tracé allégé en mètres depuis le départ (sans coordonnées GPS) qui reste sur ce téléphone et n\u2019est ni exporté ni sauvegardé. Souffle v1.8 (durées, échauffement exclu).</div>';
   return h+'</div>';
 }
 
@@ -1263,7 +1278,7 @@ function restoreLog(id){
   S.trash=S.trash.filter(x=>x!==l);const c=Object.assign({},l);delete c.delAt;S.logs.push(c);return true;
 }
 function findDup(date,dur,dist){
-  return S.logs.find(l=>l.date===date&&Math.abs((l.durMin||0)-(dur||0))<=2&&Math.abs((l.distKm||0)-(dist||0))<=0.25);
+  return S.logs.find(l=>{if(l.date!==date)return false;const ld=(l.totalSec!=null?l.totalSec/60:l.durMin)||0,lk=(l.totalKm!=null?l.totalKm:l.distKm)||0;return Math.abs(ld-(dur||0))<=2&&Math.abs(lk-(dist||0))<=0.25;});
 }
 function saveLog(){
   const d=draft;const sess=d.sessionId?sessionById(d.sessionId):null;
@@ -1281,7 +1296,8 @@ function saveLog(){
   }
   let notes=[];let label=null;
   if(d.gpxRes){
-    const dup=findDup(log.date,log.durMin,log.distKm);
+    const dup=findDup(log.date,d.gpxRes.durMin,d.gpxRes.distKm);
+    if(d.gpxRes.work){log.totalSec=d.gpxRes.durSec;log.totalKm=Math.round(d.gpxRes.distKm*100)/100;}
     if(dup&&dup.sessionId){toast('Cette course est déjà enregistrée dans le suivi.');return;}
     if(dup){S.logs=S.logs.filter(x=>x!==dup);dropTrack(dup.id);if(log.rpe==null&&dup.rpe)d.rpe=log.rpe=dup.rpe;notes.push('Cette course existait déjà (séance du '+frShort(dup.date)+') : elle est remplacée, pas doublée.');}
   }
@@ -1324,6 +1340,7 @@ async function handleGpx(file){
         d.repsDone=a.reps.length;d.avgPace=fmtPace(avg);d.firstPace=fmtPace(paces[0]);d.lastPace=fmtPace(paces[paces.length-1]);
         msg+=a.reps.length+' répétitions détectées sur '+sess.n+' prévues. Allures : '+paces.map(fmtPace).join(' · ')+'.'+(a.extra?' '+a.extra+' effort(s) en trop ignoré(s).':'')+' Vérifie les champs ci-dessous.';
       }else msg+='Aucune répétition détectée : saisis-les à la main.';
+      if(a.work){d.durMin=fmtDur(a.work.durSec);d.distKm=a.work.distKm.toFixed(2).replace('.',',');msg+=' Échauffement et retour au calme exclus : séance utile '+fmtDur(a.work.durSec)+' et '+a.work.distKm.toFixed(2).replace('.',',')+' km (total montre '+fmtDur(a.durSec)+', '+a.distKm.toFixed(2).replace('.',',')+' km).';}
     }
     d.gpxRes=a;
     if(d.kind==='test'){
@@ -1376,6 +1393,7 @@ document.addEventListener('click',async ev=>{
     case 'copy-watch':{const s=findSession(id);copyText(watchSteps(s).map((x,i)=>(i+1)+'. '+x).join('\n'));return;}
     case 'open-log':{const s=findSession(id);draft=newDraft('run',s);break;}
     case 'open-log-free':draft=newDraft('other',null);break;
+    case 'hand-quick':{const td=todayStr();if(S.logs.some(l=>l.kind==='hand'&&l.date===td)){toast('Un hand est déjà noté aujourd\u2019hui.');break;}S.logs.push({id:'l'+Date.now(),kind:'hand',key:null,sessionId:null,date:td,durSec:3600,durMin:60,distKm:null,rpe:4,reason:'',verdict:null,delta:0,source:'manuel',note:'Hand loisir'});save();toast('Hand noté : 1 h, ressenti 4/10. Ajuste avec Modifier dans Suivi si besoin.');break;}
     case 'log-hand':draft=newDraft('hand',null);break;
     case 'cancel-log':draft=null;break;
     case 'vma-ref':{const v=lastVma();if(v){S.profile.refPace=Math.round(3600/(v*.66));save();toast('Allure de référence mise à jour : '+fmtPace(S.profile.refPace)+'/km.');}break;}
@@ -1437,7 +1455,7 @@ document.addEventListener('change',ev=>{
   const t=ev.target;
   if(t.id==='gpx'&&t.files&&t.files[0]){handleGpx(t.files[0]);return;}
   if(t.id==='imp'&&t.files&&t.files[0]){
-    t.files[0].text().then(tx=>{try{const o=JSON.parse(tx);if(!o||o.v!==1||!Array.isArray(o.logs))throw 0;const cfg=S.sync;S=Object.assign(defaults(),o);S.sync=Object.assign({},defaults().sync,o.sync||{},cfg);save();toast('Sauvegarde importée.');}catch(e){toast('Fichier de sauvegarde non reconnu.');}render();});return;}
+    t.files[0].text().then(tx=>{try{const o=JSON.parse(tx);if(!o||o.v!==1||!Array.isArray(o.logs))throw 0;const cfg=S.sync;S=fix18(Object.assign(defaults(),o));S.sync=Object.assign({},defaults().sync,o.sync||{},cfg);save();toast('Sauvegarde importée.');}catch(e){toast('Fichier de sauvegarde non reconnu.');}render();});return;}
   if(t.getAttribute&&t.getAttribute('data-act')==='set-rpe'){const l=S.logs.find(x=>x.id===t.getAttribute('data-id'));if(l&&t.value){l.rpe=+t.value;save();render();}return;}
   if(t.getAttribute&&t.getAttribute('data-np')&&newPlan){newPlan[t.getAttribute('data-np')]=t.value.trim();return;}
   if(t.getAttribute&&t.getAttribute('data-sync')){const kk=t.getAttribute('data-sync');S.sync[kk]=t.value.trim();try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}return;}
