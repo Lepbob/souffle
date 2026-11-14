@@ -1,4 +1,4 @@
-<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#0F3E2E"><link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icons/apple-touch-icon.png"><link rel="icon" href="icons/icon-192.png"><style>:root{color-scheme:dark;padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px)}body{margin:0}[hidden]{display:none!important}</style></head><body><title>Souffle</title>
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#0F3E2E"><link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icons/apple-touch-icon.png"><link rel="icon" type="image/svg+xml" href="icons/icon.svg"><link rel="icon" type="image/png" href="icons/icon-192.png"><style>:root{color-scheme:dark;padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px)}body{margin:0}[hidden]{display:none!important}</style></head><body><title>Souffle</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -115,7 +115,7 @@ pre.code{white-space:pre-wrap;word-break:break-word;background:var(--surface2);b
 /* ---- Forêt du soir : composants ---- */
 #app{padding-bottom:132px}
 .top{padding:26px 0 6px}
-.brand{font-family:var(--f-disp);font-weight:400;font-size:26px;letter-spacing:0}
+.brand{font-family:var(--f-disp);font-weight:400;font-size:26px;letter-spacing:0;display:flex;align-items:center;gap:10px}
 .brand b{color:var(--fg);font-weight:400}
 .disp{font-weight:400;letter-spacing:0}
 .spec{font-weight:400;font-size:54px;letter-spacing:0;line-height:1}
@@ -435,6 +435,7 @@ function buildSession(wk,key,opts){
 function buildGym(wk,key,opts){
   const pl=P(),id=sessId(wk,key),date=effDate(wk,key),planned=plannedDate(wk,key);
   if(planned<(pl.gymStart||pl.start))return null;
+  if(S.gymPause&&!S.logs.some(l=>l.sessionId===id&&!l.trash))return null;
   const gw=gymWeek(pl,planned),lv=gymLevel(pl,gw),light=gw%4===0;
   const adj=[];let kind='gym',pain=null,msg=null,drop=[],cut=0;
   if(light){cut=1;adj.push({d:-1,t:'Semaine d\u2019allègement : une série de moins par exercice.'});}
@@ -633,6 +634,7 @@ function buildIcs(){
       const isAct=pl===act,detailed=pl.type==='maintien'||wk<=PLAN_WEEKS;
       const pdate=addDays(pl.start,7*(wk-1)+DOW[key]);
       if(key==='wed'&&pdate<(pl.gymStart||pl.start))return;
+      if(key==='wed'&&S.gymPause&&pdate>=todayStr())return;
       if(pl.closed&&pdate>pl.closed)return;
       const date=isAct&&detailed?(S.moves[sessIdOf(pl,wk,key)]||pdate):pdate;
       const isT=key==='sat'&&isTestWeekOf(pl,wk);
@@ -889,7 +891,7 @@ function header(){
   if(wk<1)right='<span class="pill">Démarre le '+esc(frShort(P().start))+'</span>';
   else if(wk>P().weeks)right='<span class="pill good">Plan terminé</span>';
   else right='<span class="pill key">Semaine '+wk+' · '+esc(phaseOf(wk).name)+'</span>';
-  return '<div class="top"><div class="brand">Sou<b>ffle</b></div>'+right+'</div>'+(memOnly?'<div class="banner warn" style="margin-bottom:12px">Stockage du navigateur indisponible : tes données sont perdues à la fermeture. Fais une sauvegarde dans Réglages.</div>':'');
+  return '<div class="top"><div class="brand"><svg width="30" height="30" viewBox="0 0 120 120" aria-hidden="true"><circle cx="60" cy="60" r="44" fill="none" stroke="currentColor" stroke-width="12" stroke-linecap="round" stroke-dasharray="207.3 276.5" transform="rotate(-90 60 60)"/><circle cx="16" cy="60" r="10" fill="#E8731A"/></svg>Souffle</div>'+right+'</div>'+(memOnly?'<div class="banner warn" style="margin-bottom:12px">Stockage du navigateur indisponible : tes données sont perdues à la fermeture. Fais une sauvegarde dans Réglages.</div>':'');
 }
 
 /* ---- Aujourd'hui ---- */
@@ -1011,7 +1013,7 @@ function sessionHero(s,isToday){
   const ck=checkSpacing(s);if(ck)h+='<div class="banner warn" style="margin-top:12px"><div>'+esc(ck)+'</div></div>';
   h+='<div class="row" style="margin-top:16px">';
   if(s.kind!=='rest')h+='<button class="btn primary" style="flex:1" data-act="open-log" data-id="'+s.id+'">Noter la séance</button>';
-  h+='<button class="btn" data-act="move" data-id="'+s.id+'">Déplacer</button><button class="btn" data-act="skip" data-id="'+s.id+'">'+(s.kind==='gym'?'Annuler':'Sauter')+'</button></div>';
+  h+='<button class="btn" data-act="move" data-id="'+s.id+'">Déplacer</button><button class="btn" data-act="skip" data-id="'+s.id+'">'+(s.kind==='gym'?'Annuler':'Sauter')+'</button>'+(s.kind==='gym'?'<button class="btn" data-act="gym-pause">Mettre la salle en pause</button>':'')+'</div>';
   if(moving===s.id)h+=moveForm(s);
   if((s.kind==='intervals'||s.kind==='easy'||s.kind==='gym')&&s.date<=todayStr()){
     h+='<div class="label" style="margin-top:16px">Fait comme prévu ? Ressenti en un tap</div><div class="rpe" style="margin-top:6px">'+[1,2,3,4,5,6,7,8,9,10].map(n=>'<button data-act="quick-log" data-id="'+s.id+'" data-v="'+n+'" aria-label="Fait comme prévu, ressenti '+n+'">'+n+'</button>').join('')+'</div>';
@@ -1408,6 +1410,9 @@ function viewSettings(){
    +'<div class="field"><label for="st-w">Poids (kg)</label><input id="st-w" type="number" inputmode="decimal" value="'+p.weight+'" data-set="weight"></div>'
    +'<div class="field"><label for="st-ref">Allure de référence (min\'s/km)</label><input id="st-ref" type="text" inputmode="text" value="'+esc(fmtPace(p.refPace))+'" data-set="refPace"></div></div>'
    +'<div class="hint" style="margin-top:8px">Allure de référence : footing sans effort sur 25 min (6\'20 au départ). Toutes les allures cibles en découlent.</div></div>';
+  h+='<div class="card"><div class="label">Salle</div>'+(S.gymPause
+    ?'<div style="margin-top:8px"><b>En pause.</b> <span class="muted">Plus de séance de salle dans le plan. Le mercredi est libre. Le travail des hanches et de l\u2019équilibre du jeudi continue.</span></div><div class="row" style="margin-top:12px"><button class="btn primary" data-act="gym-resume">Reprendre la salle</button></div><div class="hint" style="margin-top:8px">À la reprise, la salle repart du niveau 1, avec la première séance le mercredi suivant.</div>'
+    :'<div style="margin-top:8px" class="muted">Tu ne peux pas aller à la salle en ce moment ? Retire les séances du plan : le reste ne change pas.</div><div class="row" style="margin-top:12px"><button class="btn" data-act="gym-pause">Mettre la salle en pause</button></div>')+'</div>';
   h+='<div class="card"><div class="label">Plan et rappels</div><div class="grid2" style="margin-top:10px">'
    +'<div class="field"><label>Début du plan</label><div style="min-height:44px;display:flex;align-items:center">'+esc(frDate(P().start,{weekday:'long',day:'numeric',month:'short'}))+'</div></div>'
    +'<div class="field"><label for="st-time">Heure des séances</label><input id="st-time" type="time" value="'+p.remindTime+'" data-set="remindTime"></div>'
@@ -1420,7 +1425,7 @@ function viewSettings(){
    +'<div class="hint" style="margin-top:8px">« Partager » envoie le fichier vers Drive, Gmail, Keep… depuis le menu Android. Ton jeton GitHub n\u2019est jamais inclus dans la sauvegarde.</div>'
    +'<div class="sep" style="margin:14px 0"></div>'
    +(confirmReset?'<div class="banner bad"><div><b>Tout effacer ?</b> Cette action est définitive.<div class="row" style="margin-top:8px"><button class="btn sm danger" data-act="reset-ok">Oui, effacer</button><button class="btn sm" data-act="reset-cancel">Annuler</button></div></div></div>':'<button class="btn sm danger" data-act="reset">Effacer toutes les données</button>')+'</details>';
-  h+='<div class="card flat small muted">Les fichiers GPX sont lus dans ton téléphone et jamais envoyés. Seuls les chiffres sont gardés, plus un tracé allégé en mètres depuis le départ (sans coordonnées GPS) qui reste sur ce téléphone et n\u2019est ni exporté ni sauvegardé. Souffle v3.0 (Forêt du soir).</div>';
+  h+='<div class="card flat small muted">Les fichiers GPX sont lus dans ton téléphone et jamais envoyés. Seuls les chiffres sont gardés, plus un tracé allégé en mètres depuis le départ (sans coordonnées GPS) qui reste sur ce téléphone et n\u2019est ni exporté ni sauvegardé. Souffle v3.2 (salle en pause).</div>';
   return h+'</div>';
 }
 
@@ -1743,6 +1748,8 @@ document.addEventListener('click',async ev=>{
     case 'plevel2':painForm.level=v;break;
     case 'save-pain':S.pains.push({date:todayStr(),zone:painForm.zone,level:painForm.level});painForm=null;save();toast('Douleur enregistrée : le plan s\u2019adapte.');break;
     case 'ics':{const r=await saveFile('souffle-rappels.ics',buildIcs(),'text/calendar');toast(r==='ok'?'Fichier prêt : ouvre-le avec ton agenda.':r==='renamed'?'Enregistré en .txt : renomme-le en .ics pour l\u2019ouvrir.':r==='declined'?'Enregistrement annulé.':'Impossible de créer le fichier.');return;}
+    case 'gym-pause':S.gymPause=true;moving=null;save();toast('Salle en pause. Tu peux la reprendre dans Réglages.');break;
+    case 'gym-resume':{S.gymPause=false;S.plans.forEach(pl=>{pl.gymStart=nextWedFrom(todayStr());});save();toast('Salle reprise : première séance le mercredi suivant.');break;}
     case 'shift':P().start=addDays(P().start,7);save();toast('Plan décalé d\u2019une semaine.');break;
     case 'export':{const r=await saveFile('souffle-sauvegarde-'+todayStr()+'.json',JSON.stringify(S,null,1),'application/json');if(r==='ok'||r==='renamed')writeMeta({lastBackup:new Date().toISOString()});toast(r==='ok'||r==='renamed'?'Sauvegarde prête.':r==='declined'?'Enregistrement annulé.':'Impossible de créer le fichier.');render();return;}
     case 'share':await shareBackup();return;
