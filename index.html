@@ -39,6 +39,19 @@ h1,h2,h3{margin:0;font-weight:600;text-wrap:balance}
 .pill.key{background:var(--accent-soft);color:var(--r-key)} .pill.mod{background:var(--surface2);color:var(--r-mod)}
 .pill.light{background:var(--surface2);color:var(--r-light)} .pill.hand{background:var(--warn-soft);color:var(--r-hand)} .pill.gym{background:var(--surface2);color:var(--r-gym)}
 
+/* frise du plan */
+.fr{position:relative;padding-left:36px}
+.fr:before{content:'';position:absolute;left:11px;top:12px;bottom:12px;width:2px;background:var(--line)}
+.fr-i{position:relative;padding:4px 0 14px}
+.fr-n{position:absolute;left:-36px;top:6px;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:var(--bg);border:2px solid var(--muted);color:var(--bg)}
+.fr-n.done{background:var(--good);border-color:var(--good)} .fr-n.part{border-color:var(--warn)} .fr-n.gap{border:2px dashed var(--muted)}
+.fr-n.cur{background:var(--accent);border-color:var(--accent);width:28px;height:28px;left:-38px;top:5px;box-shadow:0 0 0 3px var(--bg),0 0 0 5px var(--accent)}
+.fr-h{width:100%;display:flex;justify-content:space-between;align-items:baseline;gap:10px;background:none;border:0;padding:6px 0;text-align:left;min-height:44px}
+.fr-h b{font-size:16px} .fr-gap{border:1.5px dashed var(--line);border-radius:14px;padding:10px 14px}
+.fr-cur{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:12px 16px;box-shadow:var(--shadow)}
+.phbar{display:flex;gap:6px} .phbar i{flex:1;height:8px;border-radius:999px;background:var(--line)} .phbar i.on{background:var(--accent)} .phbar i.past{background:var(--good)}
+.phlab{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;font-size:11px;margin-top:6px;color:var(--muted)} .phlab .on{color:var(--fg);font-weight:700}
+
 /* cartes */
 .stack{display:flex;flex-direction:column;gap:12px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:var(--shadow);min-width:0}
@@ -1162,7 +1175,7 @@ function planBanner(){
   if(wk>=pl.weeks-1)return '<div class="banner info"><div><b>Ton plan se termine le '+esc(frDate(planEnd(pl),{day:'numeric',month:'long'}))+'.</b> Prépare la suite dès maintenant.'+btn+'</div></div>';
   return '';
 }
-function planItem(s){return '<div class="item" style="padding:8px 0"><div class="row between"><span>'+esc(frDate(s.date,{weekday:'short'}))+' · '+esc(s.title)+'</span>'+(s.done?'<span class="pill good">Fait</span>':s.skipped?'<span class="pill">Sautée</span>':rolePill(s))+'</div><div class="small muted">'+esc(sessionSummary(s))+'</div></div>';}
+function planItem(s){return '<div class="item" style="padding:8px 0"><div class="row between"><span>'+esc(frDate(s.date,{weekday:'short'}))+' · '+esc(s.title)+'</span>'+(s.done?'<span class="pill good">Fait</span>':s.skipped?'<span class="pill">Sautée</span>':rolePill(s))+'</div><div class="small muted">'+esc(sessionSummary(s))+'</div>'+(s.skipped&&!s.done&&s.key!=='wed'&&s.date>=addDays(todayStr(),-28)?'<div class="row" style="margin-top:6px"><button class="btn sm" data-act="reinstate" data-id="'+s.id+'">Remettre au programme</button></div>':'')+'</div>';}
 function runLogsIn(mon){const end=addDays(mon,6);return S.logs.some(function(l){return l.kind==='run'&&l.date>=mon&&l.date<=end;});}
 function missedRun(){
   const pl=P(),today=todayStr();if(pl.start>today)return null;
@@ -1191,12 +1204,37 @@ function delGap(mon){
   pl.gaps=gapsOf(pl).filter(function(g){return g!==mon;});
   Object.keys(S.moves).forEach(function(id){const x=parseSessId(id);if(x&&x.pid===pl.id&&x.wk>=jw)S.moves[id]=addDays(S.moves[id],-7);});
 }
+function dayTaken(d){const pl=P(),wk=wkOfDate(pl,d);
+  if(Object.keys(S.moves).some(function(id){return S.moves[id]===d&&!S.skips[id];}))return true;
+  return wk>=1&&weekSessions(wk,{noToday:true}).some(function(x){return x.date===d&&!x.skipped;});}
+function carryDate(from){const pl=P(),t=todayStr();
+  for(let i=0;i<12;i++){const mon=addDays(mondayOf(from),7*i);if(inGap(pl,mon))continue;
+    for(const o of [4,6]){const d=addDays(mon,o);if(d<from||d<=t||dayTaken(d))continue;return d;}}
+  return null;}
+function carrySkipped(from,ids){let n=0,last=null;
+  ids.forEach(function(id){const x=parseSessId(id),d=carryDate(from);if(!d||!x)return;delete S.skips[id];S.moves[id]=d;n++;last=d;});
+  return n?{n:n,d:last}:null;}
+function recentSkipped(){const pl=P(),t=todayStr(),cw=currentWeek(),ids=[];
+  for(let w=Math.max(1,cw-4);w<=Math.min(pl.weeks,cw);w++){weekSessions(w,{noToday:true}).forEach(function(x){if(x.skipped&&!x.done&&x.key!=='wed'&&x.date>=addDays(t,-28))ids.push(x.id);});}
+  return ids;}
+function afterGapCarry(mon){const pl=P();let from=addDays(mon,7);while(inGap(pl,from))from=addDays(from,7);
+  const r=carrySkipped(from,recentSkipped());return r?' '+(r.n>1?r.n+' séances sautées remises':'Séance sautée remise')+' au programme (dernière : '+frDate(r.d,{weekday:'long',day:'numeric',month:'short'})+').':'';}
 function gapBanner(){
   const pl=P(),today=todayStr();
   if(inGap(pl,today)){const g=mondayOf(today);return '<div class="banner info"><div><b>Semaine blanche.</b> Pas de séance cette semaine, le plan reprend le lundi '+esc(frDate(addDays(g,7),{day:'numeric',month:'long'}))+'.</div></div>';}
   const run=missedRun();if(!run)return '';
   const n=run.length,a=run[0],b=addDays(run[n-1],6);
   return '<div class="banner warn"><div><b>'+(n>1?n+' semaines sans course':'Semaine sans course')+'</b> ('+esc(frDate(a,{day:'numeric',month:'short'}))+' au '+esc(frDate(b,{day:'numeric',month:'short'}))+'). Décaler le plan pour ne perdre aucune séance ?'+(n>1?' Le niveau baissera d\u2019un cran pour reprendre en douceur.':'')+'<div class="row" style="margin-top:8px"><button class="btn sm primary" data-act="gap-auto">Décaler le plan</button><button class="btn sm" data-act="gap-no" data-v="'+a+'">Non merci</button></div></div></div>';
+}
+function blankOptions(){
+  if(!blankOpen)return '';
+  const pl=P(),m0=mondayOf(todayStr());
+  let h='<div class="card"><div class="small muted">Choisis la semaine où tu ne peux pas courir (voyage, maladie, démarches). Le plan est décalé d\u2019autant : aucune séance n\u2019est perdue.</div><div class="row" style="margin-top:10px">';
+  let c=0;for(let i=0;i<8&&c<6;i++){const mon=addDays(m0,7*i);
+    if(gapsOf(pl).indexOf(mon)>=0||wkOfDate(pl,mon)>pl.weeks||wkOfDate(pl,mon)<1)continue;
+    if(i===0&&runLogsIn(mon))continue;
+    c++;h+='<button class="btn sm" data-act="blank-ok" data-v="'+mon+'">'+(i===0?'Cette semaine':i===1?'Semaine prochaine':'Sem. du '+esc(frDate(mon,{day:'numeric',month:'short'})))+'</button>';}
+  return h+'</div></div>';
 }
 function blankCard(){
   const pl=P(),today=todayStr(),m0=mondayOf(today);let h='';
@@ -1265,22 +1303,58 @@ function viewNewPlan(){
 }
 
 /* ---- Plan ---- */
+let planOpenW={};
+const CHK='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>';
+function planRows(pl){
+  const rows=[],g=gapsOf(pl),end=planEnd(pl);
+  for(let mon=pl.start;mon<=end;mon=addDays(mon,7)){
+    if(g.indexOf(mon)>=0){const l=rows[rows.length-1];if(l&&l.gap){l.n++;l.mons.push(mon);}else rows.push({gap:true,n:1,a:mon,mons:[mon]});}
+    else rows.push({wk:wkOfDate(pl,mon),mon:mon});
+  }
+  return rows;
+}
 function viewPlan(){
+  const pl=P(),today=todayStr(),m0=mondayOf(today),cw=currentWeek(),inG=inGap(pl,today),maint=pl.type==='maintien';
+  const shownWk=Math.min(Math.max(cw,1),pl.weeks);
   let h=header()+'<div class="stack">';
-  h+=planHeaderCard();
-  if(P().type==='maintien'){h+=maintenanceCards();return h+plansHistory()+'</div>';}
-  h+='<div class="card"><h2>4 mois, 4 phases</h2><p class="muted" style="margin:6px 0 0">Objectif : tenir 60 minutes de hand à haute intensité. Une semaine d\u2019allègement toutes les 4 semaines.</p></div>';
-  PHASES.forEach(p=>{
-    h+='<div class="card"><div class="row between"><div><div class="label">Phase '+p.n+' · semaines '+p.w[0]+' à '+p.w[1]+'</div><h3 style="font-size:20px;margin-top:2px">'+esc(p.name)+'</h3></div>'+(p.n<=2?'<span class="pill good">Détaillée</span>':'<span class="pill">À détailler</span>')+'</div><div class="muted" style="margin-top:6px">'+esc(p.goal)+' '+esc(p.txt)+'</div>';
-    if(p.n<=2){
-      for(let w=p.w[0];w<=p.w[1];w++){
-        h+='<div class="sep" style="margin:12px 0 8px"></div><div class="row between" id="wk-'+w+'"><b>Semaine '+w+(w===4?' · allègement':w===8?' · allègement et test VMA':'')+'</b><span class="muted small">'+esc(frDate(weekStart(w),{day:'numeric',month:'short'}))+'</span></div>';
-        weekSessions(w,{noToday:true}).forEach(s=>{h+='<div class="item" style="padding:8px 0"><div class="row between"><span>'+esc(frDate(s.date,{weekday:'short'}))+' · '+esc(s.title)+'</span>'+(s.done?'<span class="pill good">Fait</span>':s.skipped?'<span class="pill">Sautée</span>':rolePill(s))+'</div><div class="small muted">'+esc(sessionSummary(s))+'</div></div>';});
-      }
+  h+='<div><div class="muted">'+esc(pl.name)+' · semaine '+shownWk+' sur '+pl.weeks+' · fin prévue le '+esc(frDate(planEnd(pl),{day:'numeric',month:'long'}))+'</div>';
+  if(!maint){
+    const cp=phaseOf(shownWk);
+    h+='<div class="phbar" style="margin-top:12px" role="img" aria-label="Phase '+cp.n+' sur 4 en cours">'+PHASES.map(p=>'<i class="'+(p.n===cp.n?'on':p.n<cp.n?'past':'')+'"></i>').join('')+'</div><div class="phlab">'+PHASES.map(p=>'<span class="'+(p.n===cp.n?'on':'')+'">'+p.n+' · '+esc(p.name)+'</span>').join('')+'</div>';
+    h+='<div class="small muted" style="margin-top:10px"><b style="color:var(--fg)">'+esc(cp.name)+'.</b> '+esc(cp.goal+' '+cp.txt)+'</div>';
+  }else h+='<div class="small muted" style="margin-top:8px">'+esc(MAINT_PHASE.goal+' '+MAINT_PHASE.txt)+'</div>';
+  h+='</div>';
+  S.plans.filter(q=>q.start>today).forEach(q=>{h+='<div class="banner info"><div><b>Prochain plan : '+esc(q.name)+'</b> ('+(q.type==='maintien'?'maintien':'cycle')+') à partir du '+esc(frDate(q.start,{day:'numeric',month:'long'}))+'.</div></div>';});
+  const rows=planRows(pl);let h2='<div class="fr">',grouped=false;
+  rows.forEach(r=>{
+    if(r.gap){
+      const last=addDays(r.mons[r.mons.length-1],6),cur=r.mons.indexOf(m0)>=0;
+      h2+='<div class="fr-i"><span class="fr-n gap"></span><div class="fr-gap"><div class="row between"><b>Pause · '+r.n+' semaine'+(r.n>1?'s':'')+'</b><span class="muted small">'+esc(frDate(r.a,{day:'numeric',month:'short'}))+' au '+esc(frDate(last,{day:'numeric',month:'short'}))+'</span></div><div class="small muted">'+(last<today?'Le plan a été décalé, rien n\u2019est perdu.':cur?'En cours : le plan reprend le lundi '+esc(frDate(addDays(last,1),{day:'numeric',month:'long'}))+'.':'Semaine blanche prévue.')+'</div>'
+        +r.mons.filter(x=>x>=m0).map(x=>'<div class="row" style="margin-top:6px"><button class="btn sm" data-act="gap-del" data-v="'+x+'">Retirer la pause du '+esc(frDate(x,{day:'numeric',month:'short'}))+'</button></div>').join('')+'</div></div>';
+      return;
     }
-    h+='</div>';
+    const wk=r.wk;
+    if(!maint&&wk>PLAN_WEEKS){
+      if(grouped)return;grouped=true;
+      h2+='<div class="fr-i"><span class="fr-n"></span><div class="small muted" style="padding-top:6px">Semaines '+(PLAN_WEEKS+1)+' à '+pl.weeks+' : phases 3 et 4, détaillées plus tard.</div></div>';return;}
+    const list=weekSessions(wk,{noToday:true}),done=list.filter(x=>x.done).length,fin=list.filter(x=>x.done||x.skipped).length;
+    const past=addDays(r.mon,6)<today,cur=wk===cw&&!inG&&r.mon===m0;
+    const open=planOpenW[wk]!==undefined?planOpenW[wk]:cur;
+    const cls=cur?'cur':(past&&fin===list.length&&list.length?'done':past?'part':'');
+    const tag=(wk%4===0?' · allègement':'')+(isTestWeekOf(pl,wk)?' · test VMA':'');
+    const sub=past?(done+' séance'+(done>1?'s':'')+' faite'+(done>1?'s':'')+' sur '+list.length):(cur?'':list.length+' séances'+tag);
+    h2+='<div class="fr-i" id="wk-'+wk+'"><span class="fr-n '+cls+'">'+(cls==='done'?CHK:'')+'</span>';
+    if(cur){
+      h2+='<div class="fr-cur"><div class="row between"><b style="font-size:17px">Semaine '+wk+' · en cours</b><span class="muted small">'+esc(frDate(r.mon,{day:'numeric',month:'short'}))+'</span></div>'+(tag?'<div class="small muted">'+esc(tag.slice(3))+'</div>':'')+'<div style="margin-top:6px">'+list.map(planItem).join('')+'</div></div>';
+    }else{
+      h2+='<button class="fr-h" data-act="plan-wk" data-v="'+wk+'" aria-expanded="'+open+'"><span><b>Semaine '+wk+'</b>'+(sub?'<span class="small muted" style="display:block">'+esc(sub)+(past&&fin<list.length?' (certaines non faites)':'')+'</span>':'')+'</span><span class="muted small">'+esc(frDate(r.mon,{day:'numeric',month:'short'}))+'</span></button>';
+      if(open)h2+='<div class="card" style="padding:6px 14px;margin-top:4px">'+list.map(planItem).join('')+'</div>';
+    }
+    h2+='</div>';
   });
-  h+='<div class="card flat small muted">Les niveaux affichés tiennent déjà compte de tes séances passées. Les phases 1 et 2 sont des propositions de départ : dis-moi ce qu\u2019il faut corriger.</div>';
+  h+=h2+'</div>';
+  h+='<div class="row"><button class="btn" data-act="blank-toggle">'+(blankOpen?'Fermer':'Semaine blanche')+'</button><button class="btn" data-act="newplan">Reprogrammer un plan</button></div>'+blankOptions();
+  h+='<div class="card flat small muted">Les niveaux affichés tiennent déjà compte de tes séances passées. Touche une semaine pour l\u2019ouvrir.</div>';
   return h+plansHistory()+'</div>';
 }
 
@@ -1494,7 +1568,7 @@ function viewSettings(){
    +'<div class="hint" style="margin-top:8px">« Partager » envoie le fichier vers Drive, Gmail, Keep… depuis le menu Android. Ton jeton GitHub n\u2019est jamais inclus dans la sauvegarde.</div>'
    +'<div class="sep" style="margin:14px 0"></div>'
    +(confirmReset?'<div class="banner bad"><div><b>Tout effacer ?</b> Cette action est définitive.<div class="row" style="margin-top:8px"><button class="btn sm danger" data-act="reset-ok">Oui, effacer</button><button class="btn sm" data-act="reset-cancel">Annuler</button></div></div></div>':'<button class="btn sm danger" data-act="reset">Effacer toutes les données</button>')+'</details>';
-  h+='<div class="card flat small muted">Les fichiers GPX sont lus dans ton téléphone et jamais envoyés. Seuls les chiffres sont gardés, plus un tracé allégé en mètres depuis le départ (sans coordonnées GPS) qui reste sur ce téléphone et n\u2019est ni exporté ni sauvegardé. Souffle v3.4 (semaines blanches).</div>';
+  h+='<div class="card flat small muted">Les fichiers GPX sont lus dans ton téléphone et jamais envoyés. Seuls les chiffres sont gardés, plus un tracé allégé en mètres depuis le départ (sans coordonnées GPS) qui reste sur ce téléphone et n\u2019est ni exporté ni sauvegardé. Souffle v3.5 (plan en frise).</div>';
   return h+'</div>';
 }
 
@@ -1763,7 +1837,8 @@ document.addEventListener('click',async ev=>{
       const sec=q.kind==='intervals'?(q.eff.t==='time'?q.eff.v*q.n+(q.n-1)*q.rest.s:null):q.minutes*60;
       if(sec)draft.durMin=fmtDur(sec);
       saveLog();break;}
-    case 'week-link':view='plan';scrollWeek=+v;moving=null;confirmReset=false;break;
+    case 'plan-wk':{const w=+v;const cwk=currentWeek();const cur=planOpenW[w]!==undefined?planOpenW[w]:(w===cwk);planOpenW[w]=!cur;break;}
+    case 'week-link':view='plan';scrollWeek=+v;planOpenW[+v]=true;moving=null;confirmReset=false;break;
     case 'log-more':draft.more=!(draft.more||draft.reason||draft.painZone);break;
     case 'add-menu':addOpen=!addOpen;break;
     case 'track-tab':trackTab=v;window.scrollTo(0,0);break;
@@ -1791,10 +1866,11 @@ document.addEventListener('click',async ev=>{
       else{const c=gymCatalog().find(x=>x.id===v);if(c){sc.add=(sc.add||[]).concat([{id:'x'+Date.now(),n:c.n,cue:c.cue,avoid:c.avoid||[],sets:2,reps:c.r}]);}gymAddOpen=false;}
       save();break;}
     case 'lvl':{S.lvlAdj=S.lvlAdj||{};const cur=S.lvlAdj[id]||0;const nx=clamp(cur+(+v),-2,2);if(nx)S.lvlAdj[id]=nx;else delete S.lvlAdj[id];save();break;}
-    case 'gap-auto':{const run=missedRun();if(run){run.forEach(addGap);save();toast(run.length>1?'Plan décalé de '+run.length+' semaines.':'Plan décalé d\u2019une semaine.');}break;}
+    case 'gap-auto':{const run=missedRun();if(run){run.forEach(addGap);const c=afterGapCarry(run[run.length-1]);save();toast((run.length>1?'Plan décalé de '+run.length+' semaines.':'Plan décalé d\u2019une semaine.')+c);}break;}
+    case 'reinstate':{const r=carrySkipped(addDays(todayStr(),1),[id]);save();toast(r?'Séance remise au programme le '+frDate(r.d,{weekday:'long',day:'numeric',month:'long'})+'.':'Aucun créneau libre trouvé.');break;}
     case 'gap-no':{S.gapNo=S.gapNo||{};S.gapNo[v]=1;save();break;}
     case 'blank-toggle':blankOpen=!blankOpen;break;
-    case 'blank-ok':{addGap(v);blankOpen=false;save();toast('Semaine blanche ajoutée : le plan est décalé.');break;}
+    case 'blank-ok':{addGap(v);blankOpen=false;const c=afterGapCarry(v);save();toast('Semaine blanche ajoutée : le plan est décalé.'+c);break;}
     case 'gap-del':{delGap(v);save();toast('Semaine blanche retirée.');break;}
     case 'lvl-reset':{if(S.lvlAdj)delete S.lvlAdj[id];save();break;}
     case 'lvl-keep':{const m=/(?:^|-)w\d+-(\w+)$/.exec(id);const k=m&&m[1];const la=(S.lvlAdj||{})[id]||0;if(k&&la&&S.offsets[k]!==undefined){S.offsets[k]=clamp(S.offsets[k]+la,-2,2);delete S.lvlAdj[id];save();toast('Niveau gardé pour les prochaines séances.');}break;}
