@@ -726,6 +726,18 @@ async function syncPull(){
   }catch(e){writeMeta({lastErr:e.message||'Restauration impossible.'});}
   finally{syncBusy=false;render();}
 }
+function mergeBackup(o){
+  let add=0;const seen=new Set(S.logs.map(function(l){return l.id;}));
+  (o.logs||[]).forEach(function(l){
+    if(!l||!l.id||seen.has(l.id))return;
+    if(l.sessionId&&logFor(l.sessionId))return;
+    const dup=findDup(l.date,l.totalSec!=null?l.totalSec/60:l.durMin,l.totalKm!=null?l.totalKm:l.distKm);
+    if(dup&&dup.kind===l.kind)return;
+    S.logs.push(l);seen.add(l.id);add++;
+  });
+  (o.pains||[]).forEach(function(pn){if(!S.pains.some(function(x){return x.date===pn.date&&x.zone===pn.zone;}))S.pains.push(pn);});
+  return add;
+}
 function applyRestore(){
   const o=confirmRestore.o,cfg=S.sync;S=migrate(Object.assign(defaults(),o));S.sync=Object.assign({},defaults().sync,o.sync||{},cfg);
   confirmRestore=null;lastPushed='';writeMeta({blocked:false,lastErr:null});save();
@@ -1175,7 +1187,7 @@ function planBanner(){
   if(wk>=pl.weeks-1)return '<div class="banner info"><div><b>Ton plan se termine le '+esc(frDate(planEnd(pl),{day:'numeric',month:'long'}))+'.</b> Prépare la suite dès maintenant.'+btn+'</div></div>';
   return '';
 }
-function planItem(s){return '<div class="item" style="padding:8px 0"><div class="row between"><span>'+esc(frDate(s.date,{weekday:'short'}))+' · '+esc(s.title)+'</span>'+(s.done?'<span class="pill good">Fait</span>':s.skipped?'<span class="pill">Sautée</span>':rolePill(s))+'</div><div class="small muted">'+esc(sessionSummary(s))+'</div>'+(s.skipped&&!s.done&&s.key!=='wed'&&s.date>=addDays(todayStr(),-28)?'<div class="row" style="margin-top:6px"><button class="btn sm" data-act="reinstate" data-id="'+s.id+'">Remettre au programme</button></div>':'')+'</div>';}
+function planItem(s){return '<div class="item" style="padding:8px 0"><div class="row between"><span>'+esc(frDate(s.date,{weekday:'short'}))+' · '+esc(s.title)+'</span>'+(s.done?'<span class="pill good">Fait</span>':s.skipped?'<span class="pill">Sautée</span>':rolePill(s))+'</div><div class="small muted">'+esc(sessionSummary(s))+'</div>'+(!s.done&&s.date<=todayStr()&&s.kind!=='rest'?'<div class="row" style="margin-top:6px"><button class="btn sm" data-act="open-log" data-id="'+s.id+'">La noter (déjà faite)</button>'+(s.skipped&&s.key!=='wed'&&s.date>=addDays(todayStr(),-28)?'<button class="btn sm" data-act="reinstate" data-id="'+s.id+'">Remettre au programme</button>':'')+'</div>':(s.skipped&&!s.done&&s.key!=='wed'&&s.date>=addDays(todayStr(),-28)?'<div class="row" style="margin-top:6px"><button class="btn sm" data-act="reinstate" data-id="'+s.id+'">Remettre au programme</button></div>':''))+'</div>';}
 function runLogsIn(mon){const end=addDays(mon,6);return S.logs.some(function(l){return l.kind==='run'&&l.date>=mon&&l.date<=end;});}
 function missedRun(){
   const pl=P(),today=todayStr();if(pl.start>today)return null;
@@ -1382,10 +1394,9 @@ function viewTrack(){
   h+='</div>';
   }
   if(trackTab==='hist'){
-  h+='<div class="card"><div class="row between"><div class="label">Historique</div><button class="btn sm" data-act="open-log-free">Ajouter</button></div>';
+  h+='<div class="row between"><h2 style="font-size:20px">Historique</h2><button class="btn primary sm" data-act="open-log-free">+ Ajouter une séance</button></div>';
   const logs=S.logs.slice().sort((a,b)=>a.date<b.date?1:-1);
-  h+=logs.length?logs.map(logRow).join(''):'<div class="muted small" style="margin-top:6px">Aucune séance enregistrée.</div>';
-  h+='</div>';
+  h+='<div class="card" style="padding-top:4px;padding-bottom:4px">'+(logs.length?logs.map(logRow).join(''):'<div class="muted small" style="padding:12px 0">Aucune séance enregistrée.</div>')+'</div>';
   const tr=S.trash||[];
   if(tr.length){
     h+='<div class="card"><div class="label">Corbeille</div><div class="hint" style="margin:4px 0 6px">Ces séances n\u2019influencent plus le plan ni la charge. Restaurer les remet comme avant.</div>';
@@ -1513,6 +1524,7 @@ function editForm(l){
   return '<div class="item" style="background:var(--surface2);border-radius:12px;padding:12px;margin-top:8px"><div class="label">Modifier la séance</div><div class="stack" style="margin-top:8px">'
     +f('name','Nom','text','ex. Test 6 min')+'<div class="grid2">'+f('date','Date','date')+f('dur','Durée (mm:ss)','text','18:05')+f('dist','Distance (km)','text','3,04')+f('rpe','Ressenti (1 à 10)','number')+'</div>'
     +'<div class="label" style="margin-top:4px">Points clés du fractionné</div><div class="grid2">'+f('reps','Répétitions faites','number')+f('effSec','Temps moyen d\u2019effort (mm:ss ou s)','text','27')+f('effDist','Distance moyenne d\u2019effort (m)','number','100')+'</div>'
+    +(l.sessionId?'':'<div class="field"><label for="ed-attach">Rattacher à une séance du plan</label><select id="ed-attach" data-ed="attach">'+attachOptions(e.attach||'','')+'</select></div>')
     +f('note','Note','text','Ce que tu veux retenir')+'<div class="hint">Les modifications sont descriptives : elles ne refont pas le calcul de progression.</div>'
     +'<div class="row"><button class="btn primary sm" data-act="edit-save">Enregistrer</button><button class="btn sm" data-act="edit-cancel">Annuler</button></div></div></div>';
 }
@@ -1527,6 +1539,7 @@ function saveEdit(){
   const ks=e.effSec===''?null:parseDur(/^[\d.,]+$/.test(e.effSec.trim())?(num(e.effSec)/60)+'':e.effSec),kd=num(e.effDist);
   l.kp=(ks||kd)?{sec:ks,dist:kd}:null;
   l.rpe=e.rpe===''?null:Math.round(num(e.rpe));l.note=e.note.trim();
+  if(e.attach&&!l.sessionId){const x=parseSessId(e.attach);if(x&&!logFor(e.attach)){l.sessionId=e.attach;if(x.key==='tue'||x.key==='thu'||x.key==='sat')l.key=x.key;if(S.skips)delete S.skips[e.attach];}else toast('Cette séance du plan a déjà un bilan.');}
   save();toast('Séance modifiée.');return true;
 }
 function logRow(l){
@@ -1564,11 +1577,11 @@ function viewSettings(){
    +'<div class="hint" style="margin-top:8px">Le fichier .ics ajoute les 48 séances (16 semaines) avec une alerte 30 min avant. Ouvre-le avec ton agenda Android. Les rappels sont gérés par l\u2019agenda, donc fiables app fermée.</div></div>';
   h+=weatherSettings();
   h+=syncCard();
-  h+='<details class="card"'+(readMeta().token&&!confirmReset?'':' open')+'><summary style="cursor:pointer;font-weight:600;min-height:32px">Sauvegarde par fichier et effacement</summary><div class="row" style="margin-top:10px"><button class="btn primary" data-act="share">Partager la sauvegarde</button><button class="btn" data-act="export">Exporter (JSON)</button><label class="btn" for="imp" style="display:inline-flex;align-items:center">Importer</label><input id="imp" type="file" accept=".json,application/json" hidden></div>'
+  h+='<details class="card"'+(readMeta().token&&!confirmReset?'':' open')+'><summary style="cursor:pointer;font-weight:600;min-height:32px">Sauvegarde par fichier et effacement</summary><div class="row" style="margin-top:10px"><button class="btn primary" data-act="share">Partager la sauvegarde</button><button class="btn" data-act="export">Exporter (JSON)</button><label class="btn" for="imp" style="display:inline-flex;align-items:center">Importer (ajoute les séances manquantes)</label><input id="imp" type="file" accept=".json,application/json" hidden></div>'
    +'<div class="hint" style="margin-top:8px">« Partager » envoie le fichier vers Drive, Gmail, Keep… depuis le menu Android. Ton jeton GitHub n\u2019est jamais inclus dans la sauvegarde.</div>'
    +'<div class="sep" style="margin:14px 0"></div>'
    +(confirmReset?'<div class="banner bad"><div><b>Tout effacer ?</b> Cette action est définitive.<div class="row" style="margin-top:8px"><button class="btn sm danger" data-act="reset-ok">Oui, effacer</button><button class="btn sm" data-act="reset-cancel">Annuler</button></div></div></div>':'<button class="btn sm danger" data-act="reset">Effacer toutes les données</button>')+'</details>';
-  h+='<div class="card flat small muted">Les fichiers GPX sont lus dans ton téléphone et jamais envoyés. Seuls les chiffres sont gardés, plus un tracé allégé en mètres depuis le départ (sans coordonnées GPS) qui reste sur ce téléphone et n\u2019est ni exporté ni sauvegardé. Souffle v3.5 (plan en frise).</div>';
+  h+='<div class="card flat small muted">Les fichiers GPX sont lus dans ton téléphone et jamais envoyés. Seuls les chiffres sont gardés, plus un tracé allégé en mètres depuis le départ (sans coordonnées GPS) qui reste sur ce téléphone et n\u2019est ni exporté ni sauvegardé. Souffle v3.7 (rattachement auto).</div>';
   return h+'</div>';
 }
 
@@ -1626,6 +1639,32 @@ function newDraft(kind,sess){
   if(sess&&sess.kind==='gym'){d.kind='gym';d.durMin='60';}
   return d;
 }
+function matchPlanSession(date){
+  const pl=P(),cw=Math.max(1,currentWeek());let best=null,bd=99;
+  for(let w=Math.max(1,cw-4);w<=Math.min(pl.weeks,cw+1);w++){
+    weekSessions(w,{noToday:true}).forEach(function(x){
+      if(x.done||x.kind==='rest'||x.kind==='gym')return;
+      const diff=diffDays(date,x.date);
+      if(diff<-1||diff>6)return;
+      const sc=Math.abs(diff)+(diff<0?0.5:0)+(x.skipped?0.25:0);
+      if(sc<bd){bd=sc;best=x;}
+    });
+  }
+  return best;
+}
+function applySess(d,x){
+  d.sessionId=x.id;d.kind=x.kind==='test'?'test':'run';
+  if(x.kind==='easy'&&!d.durMin)d.durMin=String(x.minutes);
+  if(x.kind==='intervals'&&(d.repsDone===''||d.repsDone==null))d.repsDone=x.n;
+}
+function attachOptions(sel,extra){
+  const pl=P(),cw=Math.max(1,currentWeek()),out=[],seen={};
+  for(let w=Math.max(1,cw-10);w<=Math.min(pl.weeks,cw+1);w++){
+    weekSessions(w,{noToday:true}).forEach(function(x){if(x.kind==='rest'||(x.done&&x.id!==sel)||seen[x.id])return;seen[x.id]=1;out.push(x);});
+  }
+  if(extra&&!seen[extra]){const x=sessionById(extra);if(x)out.push(x);}
+  return '<option value="">Aucune (course libre)</option>'+out.map(function(x){return '<option value="'+x.id+'"'+(x.id===sel?' selected':'')+'>S'+x.wk+' · '+esc(frShort(x.date))+' · '+esc(x.title)+(x.skipped?' (sautée)':'')+'</option>';}).join('');
+}
 function viewLog(){
   const d=draft;const sess=d.sessionId?sessionById(d.sessionId):null;
   const planned=!!sess&&(d.kind==='run'||d.kind==='test'||d.kind==='gym');
@@ -1633,6 +1672,7 @@ function viewLog(){
   const kindSeg='<div class="seg">'+[['run','Séance du plan'],['gym','Salle'],['test','Test VMA'],['hand','Hand'],['other','Autre']].map(o=>'<button data-act="kind" data-v="'+o[0]+'" aria-pressed="'+(d.kind===o[0])+'" '+(o[0]==='run'&&(!sess||sess.kind==='test'||sess.kind==='gym')?'disabled':'')+'>'+o[1]+'</button>').join('')+'</div>';
   let h='<div class="top"><div class="brand">Bilan</div><button class="btn sm" data-act="cancel-log">Fermer</button></div><div class="stack">';
   h+='<div class="card">'+(planned?'<div><b>'+esc(sess.title)+'</b> <span class="muted small">'+esc(frShort(d.date))+'</span></div><div class="small muted">'+esc(sessionSummary(sess))+'</div>':kindSeg)+'</div>';
+  if(d.kind!=='hand')h+='<div class="card"><div class="field"><label for="lg-att">Séance du plan concernée</label><select id="lg-att" data-attach="1">'+attachOptions(d.sessionId||'',d.sessionId)+'</select></div><div class="hint" style="margin-top:6px">Pour noter une séance déjà faite : choisis-la ici, même si sa date est passée.</div></div>';
   h+='<div class="card"><div class="label">Ressenti de la séance</div><div class="hint" style="margin:4px 0 10px">1 = très facile, 10 = effort maximal</div><div class="rpe">'+[1,2,3,4,5,6,7,8,9,10].map(n=>'<button data-act="rpe" data-v="'+n+'" aria-pressed="'+(d.rpe===n)+'" aria-label="Ressenti '+n+'">'+n+'</button>').join('')+'</div></div>';
   if(d.kind==='test'){
     const dv=parseFloat(String(d.testDist).replace(',','.'));
@@ -1722,7 +1762,9 @@ function findDup(date,dur,dist){
   return S.logs.find(l=>{if(l.date!==date)return false;const ld=(l.totalSec!=null?l.totalSec/60:l.durMin)||0,lk=(l.totalKm!=null?l.totalKm:l.distKm)||0;return Math.abs(ld-(dur||0))<=2&&Math.abs(lk-(dist||0))<=0.25;});
 }
 function saveLog(){
-  const d=draft;const sess=d.sessionId?sessionById(d.sessionId):null;
+  const d=draft;
+  if((d.kind==='run'||d.kind==='other')&&!d.sessionId&&!d.noMatch){const m=matchPlanSession(d.date);if(m)applySess(d,m);}
+  const sess=d.sessionId?sessionById(d.sessionId):null;
   const num=x=>{const n=parseFloat(String(x).replace(',','.'));return isFinite(n)?n:null;};
   const log={id:'l'+Date.now(),kind:d.kind==='run'?'run':d.kind,key:null,sessionId:null,date:d.date,durSec:parseDur(d.durMin),durMin:parseDur(d.durMin)==null?null:parseDur(d.durMin)/60,name:(d.name||'').trim(),distKm:num(d.distKm),
     repsDone:null,repsPlanned:null,avgPace:parsePace(d.avgPace),firstPace:parsePace(d.firstPace),lastPace:parsePace(d.lastPace),
@@ -1763,7 +1805,7 @@ function saveLog(){
     notes.push(d.rpe!=null&&log.durMin?'Charge du hand : '+Math.round(log.durMin*d.rpe)+' (durée × ressenti), comptée dans la semaine.':'Hand enregistré.');
     if(d.rpe>=8)notes.push('Hand intense : le jeudi reste très léger.');
   }else{notes.push('Séance enregistrée et comptée dans la charge.');}
-  S.logs.push(log);
+  S.logs.push(log);if(log.sessionId&&S.skips)delete S.skips[log.sessionId];
   if(d.gpxRes)putTrack(log.id,d.gpxRes);
   let pain=null;
   if(d.painZone&&d.painLevel){pain={date:d.date,zone:d.painZone,level:d.painLevel};S.pains.push(pain);}
@@ -1773,9 +1815,14 @@ function saveLog(){
 }
 async function handleGpx(file){
   const d=draft;
-  const sess=d.sessionId?sessionById(d.sessionId):null;
+  let sess=d.sessionId?sessionById(d.sessionId):null;
   try{
-    const txt=await file.text();const pts=parseGpx(txt);const a=analyseTrack(pts,d.kind==='run'?sess:null);
+    const txt=await file.text();const pts=parseGpx(txt);
+    if((d.kind==='run'||d.kind==='other')&&!d.noMatch){
+      const gd=ymd(new Date(pts[0].t*1000)),cur=sess;
+      if(!cur||cur.date>addDays(gd,1)||cur.date<addDays(gd,-6)){const m=matchPlanSession(gd);if(m){applySess(d,m);sess=m;d.autoMsg=true;}}
+    }
+    const a=analyseTrack(pts,d.kind==='run'?sess:null);
     d.durMin=fmtDur(a.durSec);d.distKm=a.distKm.toFixed(2).replace('.',',');
     const day=new Date(pts[0].t*1000);d.date=ymd(day);
     let msg='GPX lu : '+fmtDur(a.durSec)+', '+a.distKm.toFixed(1).replace('.',',')+' km, allure moyenne '+fmtPace(a.avgPace)+'/km. ';
@@ -1795,6 +1842,7 @@ async function handleGpx(file){
     }
     const dup=findDup(d.date,a.durMin,a.distKm);
     if(dup)msg=(dup.sessionId?'Déjà enregistrée dans le suivi : l\u2019import sera refusé. ':'Cette course existe déjà dans l\u2019historique : elle sera remplacée, pas doublée. ')+msg;
+    if(d.autoMsg&&sess){msg='Rattachée à : '+sess.title+' du '+frShort(sess.date)+'. (Change-la dans « Séance du plan concernée ».) '+msg;d.autoMsg=false;}
     d.gpxMsg=esc(msg);
   }catch(e){d.gpxRes=null;d.gpxMsg=esc(e.message||'Import impossible.');}
   render();
@@ -1944,9 +1992,14 @@ document.addEventListener('input',ev=>{
 });
 document.addEventListener('change',ev=>{
   const t=ev.target;
+  if(t.hasAttribute&&t.hasAttribute('data-attach')&&draft){
+    const sid=t.value;
+    if(!sid){draft.sessionId=null;draft.noMatch=true;if(draft.kind==='test'||draft.kind==='gym')draft.kind='run';}
+    else{const x=sessionById(sid);if(x){draft.noMatch=false;draft.sessionId=sid;draft.kind=x.kind==='test'?'test':x.kind==='gym'?'gym':'run';if(!draft.gpxRes)draft.date=x.date<=todayStr()?x.date:todayStr();if(x.kind==='easy'&&!draft.durMin)draft.durMin=String(x.minutes);if(x.kind==='intervals'&&(draft.repsDone===''||draft.repsDone==null))draft.repsDone=x.n;}}
+    render();return;}
   if(t.id==='gpx'&&t.files&&t.files[0]){handleGpx(t.files[0]);return;}
   if(t.id==='imp'&&t.files&&t.files[0]){
-    t.files[0].text().then(tx=>{try{const o=JSON.parse(tx);if(!o||o.v!==1||!Array.isArray(o.logs))throw 0;const cfg=S.sync;S=migrate(Object.assign(defaults(),o));S.sync=Object.assign({},defaults().sync,o.sync||{},cfg);save();toast('Sauvegarde importée.');}catch(e){toast('Fichier de sauvegarde non reconnu.');}render();});return;}
+    t.files[0].text().then(tx=>{try{const o=JSON.parse(tx);if(!o||o.v!==1||!Array.isArray(o.logs))throw 0;const n=mergeBackup(o);save();toast(n?n+' séance'+(n>1?'s':'')+' ajoutée'+(n>1?'s':'')+'. Rien n\u2019a été remplacé.':'Aucune séance nouvelle dans ce fichier : rien n\u2019a changé.');}catch(e){toast('Fichier de sauvegarde non reconnu.');}render();});return;}
   if(t.getAttribute&&t.getAttribute('data-act')==='set-rpe'){const l=S.logs.find(x=>x.id===t.getAttribute('data-id'));if(l&&t.value){l.rpe=+t.value;save();render();}return;}
   if(t.getAttribute&&t.getAttribute('data-np')&&newPlan){newPlan[t.getAttribute('data-np')]=t.value.trim();return;}
   if(t.getAttribute&&t.getAttribute('data-sync')){const kk=t.getAttribute('data-sync');S.sync[kk]=t.value.trim();try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}return;}
